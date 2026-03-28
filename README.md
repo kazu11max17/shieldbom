@@ -139,21 +139,13 @@ shieldbom db info
 
 ## Why ShieldBOM?
 
-Existing SCA tools (FOSSA, Snyk, and enterprise platforms) are built for web applications and container ecosystems. If you work with embedded software, you already know the gaps:
+Most SCA tools are built for web applications and container ecosystems. If you work with embedded software, you already know the gaps:
 
-- **C/C++ supply chains are invisible.** Package managers like Conan and vcpkg have limited SBOM support. Vendor-provided binaries ship with no metadata. These tools assume npm/pip/Maven dependency trees exist.
+- **C/C++ supply chains are invisible.** Package managers like Conan and vcpkg have limited SBOM support. Vendor-provided binaries ship with no metadata. Most tools assume npm/pip/Maven dependency trees exist.
 - **Air-gapped environments are common.** Factory build servers, automotive CI systems, and classified environments cannot phone home to a cloud API on every build.
-- **$100K+/year licensing is not an option.** Enterprise SCA platforms with real embedded coverage price out small-to-mid-size teams. ShieldBOM's core functionality is free and open source.
+- **Cost is a barrier.** Commercial tools with real embedded coverage are priced for large enterprises. ShieldBOM's core functionality is free and open source.
 
-ShieldBOM is built for this reality:
-
-| | ShieldBOM (OSS) | Enterprise SCA | FOSSA / Snyk |
-|---|---|---|---|
-| SPDX + CycloneDX parsing | Yes | Yes | Partial |
-| Offline operation | Yes | Limited | No |
-| Single binary, no dependencies | Yes | No | No |
-| Embedded/IoT focus | Yes | Yes (at $100K+/yr) | No |
-| Price | Free | $100K+/year | $0-500/month |
+ShieldBOM is built for this reality: offline-first, single binary, no runtime dependencies, and focused on the formats and workflows embedded teams actually use.
 
 ### EU Cyber Resilience Act (CRA)
 
@@ -166,7 +158,7 @@ The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/e
 | **Phase 1** | OSS CLI: SBOM parsing, vulnerability matching, license checks | **v0.1.0 released** |
 | **Phase 2** | SaaS dashboard, CI/CD integration (GitHub Actions, GitLab CI) | Planned |
 | **Phase 3** | Embedded specialization: binary SBOM, RTOS support, EU CRA reports | Planned |
-| **Phase 4** | Platform: fuzzing integration, SARIF aggregation | Planned |
+| **Phase 4** | Platform: multi-project management, team features, API integrations | Planned |
 
 ### Current limitations (Phase 1)
 
