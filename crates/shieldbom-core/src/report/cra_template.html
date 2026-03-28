@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EU CRA Compliance Report - {{ product_name }}</title>
+<style>
+  :root {
+    --color-pass: #2e7d32;
+    --color-fail: #d32f2f;
+    --color-na: #757575;
+    --color-critical: #d32f2f;
+    --color-high: #e65100;
+    --color-medium: #f9a825;
+    --color-low: #1565c0;
+    --color-bg: #fafafa;
+    --color-card: #ffffff;
+    --color-border: #e0e0e0;
+    --color-text: #212121;
+    --color-text-secondary: #616161;
+    --color-accent: #1a237e;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--color-bg);
+    color: var(--color-text);
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  @media print {
+    body { padding: 0; background: white; }
+    .no-print { display: none; }
+    section { break-inside: avoid; }
+  }
+  .container { max-width: 1000px; margin: 0 auto; }
+  header {
+    background: linear-gradient(135deg, #1a237e 0%, #0d47a1 100%);
+    color: white;
+    padding: 2.5rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+  }
+  header h1 { font-size: 1.6rem; font-weight: 700; margin-bottom: 0.25rem; }
+  header .subtitle { font-size: 1rem; opacity: 0.9; margin-bottom: 1rem; }
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.5rem;
+    font-size: 0.875rem;
+    opacity: 0.9;
+  }
+  .meta-grid dt { font-weight: 600; }
+  .meta-grid dd { margin-left: 0; }
+  section {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 1.1rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--color-border);
+    background: #f5f5f5;
+    color: var(--color-accent);
+  }
+  section h2 .section-num {
+    display: inline-block;
+    background: var(--color-accent);
+    color: white;
+    width: 1.8rem;
+    height: 1.8rem;
+    line-height: 1.8rem;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 0.8rem;
+    margin-right: 0.5rem;
+  }
+  .section-body { padding: 1.25rem 1.5rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    background: #fafafa;
+    border-bottom: 2px solid var(--color-border);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+  }
+  tr:hover td { background: #f8f9ff; }
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    text-align: center;
+  }
+  .card .count { font-size: 2rem; font-weight: 700; }
+  .card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); margin-top: 0.25rem; }
+  .card.total { border-top: 3px solid #424242; }
+  .card.total .count { color: #424242; }
+  .card.critical { border-top: 3px solid var(--color-critical); }
+  .card.critical .count { color: var(--color-critical); }
+  .card.high { border-top: 3px solid var(--color-high); }
+  .card.high .count { color: var(--color-high); }
+  .card.medium { border-top: 3px solid var(--color-medium); }
+  .card.medium .count { color: var(--color-medium); }
+  .card.low { border-top: 3px solid var(--color-low); }
+  .card.low .count { color: var(--color-low); }
+  .card.license { border-top: 3px solid #7b1fa2; }
+  .card.license .count { color: #7b1fa2; }
+  .severity-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: white;
+  }
+  .severity-critical { background: var(--color-critical); }
+  .severity-high { background: var(--color-high); }
+  .severity-medium { background: var(--color-medium); color: #212121; }
+  .severity-low { background: var(--color-low); }
+  .severity-unknown { background: #9e9e9e; }
+  .severity-none { background: #bdbdbd; color: #212121; }
+  .status-pass {
+    display: inline-block;
+    padding: 0.2rem 0.75rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    background: #e8f5e9;
+    color: var(--color-pass);
+    border: 1px solid #a5d6a7;
+  }
+  .status-fail {
+    display: inline-block;
+    padding: 0.2rem 0.75rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    background: #ffebee;
+    color: var(--color-fail);
+    border: 1px solid #ef9a9a;
+  }
+  .status-na {
+    display: inline-block;
+    padding: 0.2rem 0.75rem;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    font-weight: 700;
+    background: #f5f5f5;
+    color: var(--color-na);
+    border: 1px solid #e0e0e0;
+  }
+  .evidence { color: var(--color-text-secondary); font-size: 0.85rem; font-style: italic; }
+  .description { color: var(--color-text-secondary); max-width: 350px; }
+  .remediation {
+    font-size: 0.85rem;
+    color: var(--color-pass);
+    font-weight: 600;
+  }
+  .empty-state {
+    padding: 2rem;
+    text-align: center;
+    color: var(--color-text-secondary);
+  }
+  .license-list { margin: 0; padding-left: 1.5rem; }
+  .license-list li { margin-bottom: 0.25rem; }
+  .cra-ref {
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    display: block;
+    margin-top: 0.25rem;
+  }
+  footer {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    margin-top: 2rem;
+    padding: 1rem;
+    border-top: 1px solid var(--color-border);
+  }
+  footer .disclaimer {
+    max-width: 700px;
+    margin: 0.75rem auto 0;
+    font-size: 0.7rem;
+    line-height: 1.5;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- Header / Product Identification -->
+  <header>
+    <h1>EU Cyber Resilience Act (CRA) Compliance Report</h1>
+    <div class="subtitle">{{ product_name }} v{{ product_version }}</div>
+    <dl class="meta-grid">
+      <dt>Manufacturer:</dt>
+      <dd>{{ manufacturer }}</dd>
+      <dt>Report Date:</dt>
+      <dd>{{ timestamp }}</dd>
+      <dt>Product ID:</dt>
+      <dd>{{ product_id }}</dd>
+      <dt>SBOM Source:</dt>
+      <dd>{{ sbom_file }} ({{ format_detected }})</dd>
+    </dl>
+  </header>
+
+  <!-- Section 1: SBOM Summary -->
+  <section>
+    <h2><span class="section-num">1</span> SBOM Summary</h2>
+    <div class="summary-cards" style="margin: 1.25rem 1.5rem;">
+      <div class="card total">
+        <div class="count">{{ stats.total_components }}</div>
+        <div class="label">Components</div>
+      </div>
+      <div class="card critical">
+        <div class="count">{{ stats.critical }}</div>
+        <div class="label">Critical</div>
+      </div>
+      <div class="card high">
+        <div class="count">{{ stats.high }}</div>
+        <div class="label">High</div>
+      </div>
+      <div class="card medium">
+        <div class="count">{{ stats.medium }}</div>
+        <div class="label">Medium</div>
+      </div>
+      <div class="card low">
+        <div class="count">{{ stats.low }}</div>
+        <div class="label">Low</div>
+      </div>
+      <div class="card license">
+        <div class="count">{{ stats.license_issues }}</div>
+        <div class="label">License Issues</div>
+      </div>
+    </div>
+    {% if license_breakdown | length > 0 %}
+    <div class="section-body">
+      <strong>License Breakdown:</strong>
+      <ul class="license-list">
+        {% for lic in license_breakdown %}
+        <li>{{ lic.name }}: {{ lic.count }} component{{ lic.count | pluralize }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Section 2: Vulnerability Disclosure -->
+  <section>
+    <h2><span class="section-num">2</span> Vulnerability Disclosure</h2>
+    {% if vulnerabilities | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>CVE ID</th>
+          <th>Severity</th>
+          <th>CVSS</th>
+          <th>Component</th>
+          <th>Description</th>
+          <th>Remediation</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for vuln in vulnerabilities %}
+        <tr>
+          <td><strong>{{ vuln.cve_id }}</strong></td>
+          <td><span class="severity-badge severity-{{ vuln.severity_class }}">{{ vuln.severity }}</span></td>
+          <td>{% if vuln.cvss_score %}{{ vuln.cvss_score }}{% else %}-{% endif %}</td>
+          <td>{{ vuln.component_name }} @ {{ vuln.component_version }}</td>
+          <td class="description">{{ vuln.description_truncated }}</td>
+          <td>{% if vuln.fixed_version %}<span class="remediation">Upgrade to {{ vuln.fixed_version }}</span>{% else %}<em style="color:#9e9e9e">No fix available</em>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No known vulnerabilities found in scanned components.</div>
+    {% endif %}
+  </section>
+
+  <!-- Section 3: Security Update Information -->
+  <section>
+    <h2><span class="section-num">3</span> Security Update Information</h2>
+    <div class="section-body">
+      <table style="max-width: 600px;">
+        <tr>
+          <td style="font-weight: 600; width: 200px;">Support Period:</td>
+          <td>{{ support_period }}</td>
+        </tr>
+        <tr>
+          <td style="font-weight: 600;">Update Mechanism:</td>
+          <td>{{ update_mechanism }}</td>
+        </tr>
+      </table>
+      <p class="cra-ref" style="margin-top: 1rem;">
+        CRA Annex I, Part II, Sec. 8-9: Manufacturers must provide mechanisms for secure distribution
+        of security updates, disseminated free of charge without delay.
+      </p>
+    </div>
+  </section>
+
+  <!-- Section 4: Conformity Assessment (Article 10 Essential Requirements) -->
+  <section>
+    <h2><span class="section-num">4</span> Conformity Assessment &mdash; CRA Essential Requirements</h2>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40px;">#</th>
+          <th>Requirement</th>
+          <th>CRA Reference</th>
+          <th style="width: 80px;">Status</th>
+          <th>Evidence / Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in checklist %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ item.requirement }}</td>
+          <td style="font-size: 0.8rem; color: var(--color-text-secondary);">{{ item.cra_reference }}</td>
+          <td>
+            {% if item.status == "Pass" %}
+            <span class="status-pass">PASS</span>
+            {% elif item.status == "Fail" %}
+            <span class="status-fail">FAIL</span>
+            {% else %}
+            <span class="status-na">N/A</span>
+            {% endif %}
+          </td>
+          <td class="evidence">{{ item.evidence }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Section 5: Component Inventory -->
+  <section>
+    <h2><span class="section-num">5</span> Component Inventory ({{ components | length }})</h2>
+    {% if components | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Version</th>
+          <th>Supplier</th>
+          <th>License</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for comp in components %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ comp.name }}</td>
+          <td>{{ comp.version }}</td>
+          <td>{% if comp.supplier %}{{ comp.supplier }}{% else %}<em style="color:#9e9e9e">Unknown</em>{% endif %}</td>
+          <td>{% if comp.licenses | length > 0 %}{{ comp.licenses | join(sep=", ") }}{% else %}<em style="color:#9e9e9e">None</em>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No components found.</div>
+    {% endif %}
+  </section>
+
+  <!-- Section 6: Technical Documentation Reference -->
+  <section>
+    <h2><span class="section-num">6</span> Technical Documentation Reference</h2>
+    <div class="section-body">
+      <table style="max-width: 700px;">
+        <tr>
+          <td style="font-weight: 600; width: 200px;">Full SBOM Location:</td>
+          <td>{{ sbom_file }}</td>
+        </tr>
+        <tr>
+          <td style="font-weight: 600;">SBOM Format:</td>
+          <td>{{ format_detected }}</td>
+        </tr>
+        <tr>
+          <td style="font-weight: 600;">Scan Tool:</td>
+          <td>ShieldBOM v{{ version }}</td>
+        </tr>
+        <tr>
+          <td style="font-weight: 600;">Scan Timestamp:</td>
+          <td>{{ timestamp }}</td>
+        </tr>
+      </table>
+      <p class="cra-ref" style="margin-top: 1rem;">
+        CRA Annex VII requires technical documentation to include the SBOM (Sec. 2),
+        evidence of conformity with essential requirements (Sec. 3), and vulnerability
+        handling documentation (Sec. 4).
+      </p>
+    </div>
+  </section>
+
+  <footer>
+    Generated by ShieldBOM v{{ version }} &mdash; {{ timestamp }}
+    <div class="disclaimer">
+      This report is generated automatically based on SBOM analysis and vulnerability scanning.
+      It is intended to support EU CRA compliance efforts but does not constitute legal advice.
+      Conformity assessment items marked N/A require manual verification by the manufacturer.
+      Consult qualified legal counsel for binding interpretations of CRA obligations.
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

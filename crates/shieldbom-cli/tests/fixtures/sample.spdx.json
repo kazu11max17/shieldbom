@@ -1,0 +1,72 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "firmware-v1.0",
+  "documentNamespace": "https://example.com/firmware-v1.0",
+  "creationInfo": {
+    "created": "2026-03-18T00:00:00Z",
+    "creators": ["Tool: shieldbom-test"]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-openssl",
+      "name": "openssl",
+      "versionInfo": "3.0.1",
+      "supplier": "Organization: OpenSSL Project",
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "externalRefs": [
+        {
+          "referenceCategory": "SECURITY",
+          "referenceType": "cpe23Type",
+          "referenceLocator": "cpe:2.3:a:openssl:openssl:3.0.1:*:*:*:*:*:*:*"
+        },
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/openssl@3.0.1"
+        }
+      ],
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "abc123def456"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-zlib",
+      "name": "zlib",
+      "versionInfo": "1.2.11",
+      "licenseConcluded": "Zlib",
+      "licenseDeclared": "Zlib",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/zlib@1.2.11"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-busybox",
+      "name": "busybox",
+      "versionInfo": "1.33.0",
+      "licenseConcluded": "GPL-2.0-only",
+      "licenseDeclared": "GPL-2.0-only",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/busybox@1.33.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-proprietary-lib",
+      "name": "proprietary-lib",
+      "versionInfo": "2.0.0"
+    }
+  ]
+}

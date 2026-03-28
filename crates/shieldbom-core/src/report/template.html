@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ShieldBOM Scan Report</title>
+<style>
+  :root {
+    --color-critical: #d32f2f;
+    --color-high: #e65100;
+    --color-medium: #f9a825;
+    --color-low: #1565c0;
+    --color-bg: #fafafa;
+    --color-card: #ffffff;
+    --color-border: #e0e0e0;
+    --color-text: #212121;
+    --color-text-secondary: #616161;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--color-bg);
+    color: var(--color-text);
+    line-height: 1.6;
+    padding: 2rem;
+  }
+  .container { max-width: 1200px; margin: 0 auto; }
+  header {
+    background: linear-gradient(135deg, #1a237e 0%, #283593 100%);
+    color: white;
+    padding: 2rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+  }
+  header h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 0.5rem; }
+  .meta { font-size: 0.875rem; opacity: 0.9; }
+  .meta span { margin-right: 2rem; }
+  .summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.5rem;
+  }
+  .card {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    text-align: center;
+  }
+  .card .count { font-size: 2rem; font-weight: 700; }
+  .card .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-secondary); margin-top: 0.25rem; }
+  .card.critical .count { color: var(--color-critical); }
+  .card.critical { border-top: 3px solid var(--color-critical); }
+  .card.high .count { color: var(--color-high); }
+  .card.high { border-top: 3px solid var(--color-high); }
+  .card.medium .count { color: var(--color-medium); }
+  .card.medium { border-top: 3px solid var(--color-medium); }
+  .card.low .count { color: var(--color-low); }
+  .card.low { border-top: 3px solid var(--color-low); }
+  .card.total { border-top: 3px solid #424242; }
+  .card.total .count { color: #424242; }
+  .card.license { border-top: 3px solid #7b1fa2; }
+  .card.license .count { color: #7b1fa2; }
+  section {
+    background: var(--color-card);
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+    overflow: hidden;
+  }
+  section h2 {
+    font-size: 1.1rem;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--color-border);
+    background: #f5f5f5;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  th {
+    text-align: left;
+    padding: 0.75rem 1rem;
+    background: #fafafa;
+    border-bottom: 2px solid var(--color-border);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  td {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid #f0f0f0;
+    vertical-align: top;
+  }
+  tr:hover td { background: #f8f9ff; }
+  .severity-badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: white;
+  }
+  .severity-critical { background: var(--color-critical); }
+  .severity-high { background: var(--color-high); }
+  .severity-medium { background: var(--color-medium); color: #212121; }
+  .severity-low { background: var(--color-low); }
+  .severity-unknown { background: #9e9e9e; }
+  .severity-none { background: #bdbdbd; color: #212121; }
+  .issue-type {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #fff3e0;
+    color: #e65100;
+  }
+  .description { color: var(--color-text-secondary); max-width: 400px; }
+  .empty-state {
+    padding: 2rem;
+    text-align: center;
+    color: var(--color-text-secondary);
+  }
+  footer {
+    text-align: center;
+    font-size: 0.75rem;
+    color: var(--color-text-secondary);
+    margin-top: 2rem;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>ShieldBOM Scan Report</h1>
+    <div class="meta">
+      <span>File: {{ sbom_file }}</span>
+      <span>Format: {{ format_detected }}</span>
+      <span>Date: {{ timestamp }}</span>
+    </div>
+  </header>
+
+  <div class="summary-cards">
+    <div class="card total">
+      <div class="count">{{ stats.total_components }}</div>
+      <div class="label">Components</div>
+    </div>
+    <div class="card critical">
+      <div class="count">{{ stats.critical }}</div>
+      <div class="label">Critical</div>
+    </div>
+    <div class="card high">
+      <div class="count">{{ stats.high }}</div>
+      <div class="label">High</div>
+    </div>
+    <div class="card medium">
+      <div class="count">{{ stats.medium }}</div>
+      <div class="label">Medium</div>
+    </div>
+    <div class="card low">
+      <div class="count">{{ stats.low }}</div>
+      <div class="label">Low</div>
+    </div>
+    <div class="card license">
+      <div class="count">{{ stats.license_issues }}</div>
+      <div class="label">License Issues</div>
+    </div>
+  </div>
+
+  <section>
+    <h2>Components ({{ components | length }})</h2>
+    {% if components | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Name</th>
+          <th>Version</th>
+          <th>License</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for comp in components %}
+        <tr>
+          <td>{{ loop.index }}</td>
+          <td>{{ comp.name }}</td>
+          <td>{{ comp.version }}</td>
+          <td>{% if comp.licenses | length > 0 %}{{ comp.licenses | join(sep=", ") }}{% else %}<em style="color:#9e9e9e">None</em>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No components found.</div>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>Vulnerabilities ({{ vulnerabilities | length }})</h2>
+    {% if vulnerabilities | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>CVE ID</th>
+          <th>Severity</th>
+          <th>CVSS</th>
+          <th>Component</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for vuln in vulnerabilities %}
+        <tr>
+          <td><strong>{{ vuln.cve_id }}</strong></td>
+          <td><span class="severity-badge severity-{{ vuln.severity_class }}">{{ vuln.severity }}</span></td>
+          <td>{% if vuln.cvss_score %}{{ vuln.cvss_score }}{% else %}-{% endif %}</td>
+          <td>{{ vuln.component_name }} @ {{ vuln.component_version }}</td>
+          <td class="description">{{ vuln.description_truncated }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No vulnerabilities found.</div>
+    {% endif %}
+  </section>
+
+  <section>
+    <h2>License Issues ({{ license_issues | length }})</h2>
+    {% if license_issues | length > 0 %}
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Component</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for issue in license_issues %}
+        <tr>
+          <td><span class="issue-type">{{ issue.issue_type }}</span></td>
+          <td>{{ issue.component_name }} @ {{ issue.component_version }}</td>
+          <td class="description">{{ issue.description }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">No license issues found.</div>
+    {% endif %}
+  </section>
+
+  <footer>
+    Generated by ShieldBOM v{{ version }}
+  </footer>
+</div>
+</body>
+</html>

@@ -1,0 +1,33 @@
+[package]
+name = "shieldbom-core"
+description = "Core library for ShieldBOM — SBOM parsing, vulnerability matching, and license checking"
+keywords = ["sbom", "spdx", "cyclonedx", "vulnerability", "embedded"]
+categories = ["development-tools"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+quick-xml = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+rusqlite = { workspace = true }
+colored = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tera = { workspace = true }
+tracing = { workspace = true }
+packageurl = { workspace = true }
+clap = { workspace = true, optional = true }
+
+[features]
+default = ["cli"]
+cli = ["dep:clap"]
+
+[dev-dependencies]
+insta = { workspace = true }
+tempfile = { workspace = true }

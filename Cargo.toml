@@ -1,0 +1,67 @@
+[workspace]
+members = ["crates/shieldbom-core", "crates/shieldbom-cli", "crates/shieldbom-server"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/kazu11max17/shieldbom"
+
+[workspace.dependencies]
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+quick-xml = { version = "0.36", features = ["serialize"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Async
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+# Database
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# Output
+tabled = "0.15"
+colored = "2"
+
+# Templating
+tera = "1"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Package URL
+packageurl = "0.3"
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Dev
+insta = { version = "1", features = ["json"] }
+tempfile = "3"
+assert_cmd = "2"
+predicates = "3"
+
+# Web framework
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+uuid = { version = "1", features = ["v4"] }
+
+# Crypto
+sha2 = "0.10"
+hex = "0.4"
+rand = "0.8"
+
+# Internal
+shieldbom-core = { path = "crates/shieldbom-core" }
