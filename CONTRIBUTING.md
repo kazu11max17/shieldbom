@@ -25,7 +25,7 @@ Requires Rust 1.75+ (2021 edition).
 ## Making Changes
 
 1. **Open an issue first** if your change is non-trivial. This avoids wasted effort if the change doesn't align with the project direction.
-2. Fork the repository and create a feature branch from `main`.
+2. Fork the repository and create a feature branch from `master`.
 3. Write tests for new functionality.
 4. Run the full check suite before submitting:
    ```bash

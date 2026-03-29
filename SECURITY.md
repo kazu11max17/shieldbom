@@ -6,7 +6,7 @@ If you discover a security vulnerability in ShieldBOM, please report it responsi
 
 **Do NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please email: **security@shieldbom.dev** (or open a [GitHub Security Advisory](https://github.com/kazu11max17/shieldbom/security/advisories/new))
+Instead, please open a [GitHub Security Advisory](https://github.com/kazu11max17/shieldbom/security/advisories/new)
 
 Include:
 - Description of the vulnerability

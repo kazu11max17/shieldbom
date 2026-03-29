@@ -2,3 +2,4 @@
 *.cast
 shieldbom-server.db
 CLAUDE.md
+.vscode/
