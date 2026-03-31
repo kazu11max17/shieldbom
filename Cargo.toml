@@ -3,10 +3,11 @@ members = ["crates/shieldbom-core", "crates/shieldbom-cli", "crates/shieldbom-se
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/kazu11max17/shieldbom"
+description = "SBOM management CLI for embedded & IoT — SPDX/CycloneDX parsing, OSV.dev vulnerability scanning, EU CRA compliance"
 
 [workspace.dependencies]
 # Serialization
