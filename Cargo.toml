@@ -65,4 +65,4 @@ hex = "0.4"
 rand = "0.8"
 
 # Internal
-shieldbom-core = { path = "crates/shieldbom-core" }
+shieldbom = { path = "crates/shieldbom-core" }

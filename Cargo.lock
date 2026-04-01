@@ -1754,27 +1754,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "shieldbom-cli"
-version = "0.1.1"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "colored",
- "predicates",
- "reqwest",
- "serde",
- "serde_json",
- "shieldbom-core",
- "tabled",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "shieldbom-core"
+name = "shieldbom"
 version = "0.1.1"
 dependencies = [
  "anyhow",
@@ -1796,6 +1776,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "shieldbom-cli"
+version = "0.1.1"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "colored",
+ "predicates",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "shieldbom",
+ "tabled",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "shieldbom-server"
 version = "0.1.1"
 dependencies = [
@@ -1808,7 +1808,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "shieldbom-core",
+ "shieldbom",
  "thiserror 1.0.69",
  "tokio",
  "tower-http",

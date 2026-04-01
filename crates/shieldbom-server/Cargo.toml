@@ -11,7 +11,7 @@ name = "shieldbom-server"
 path = "src/main.rs"
 
 [dependencies]
-shieldbom-core = { workspace = true }
+shieldbom = { workspace = true }
 axum = { workspace = true }
 tower-http = { workspace = true }
 tokio = { workspace = true }

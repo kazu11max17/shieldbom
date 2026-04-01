@@ -13,7 +13,7 @@ name = "shieldbom"
 path = "src/main.rs"
 
 [dependencies]
-shieldbom-core = { workspace = true }
+shieldbom = { workspace = true }
 clap = { workspace = true }
 tabled = { workspace = true }
 colored = { workspace = true }
