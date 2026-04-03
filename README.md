@@ -3,7 +3,7 @@
 **SBOM vulnerability scanner and license checker for embedded/IoT software.**
 
 [![CI](https://github.com/kazu11max17/shieldbom/actions/workflows/ci.yml/badge.svg)](https://github.com/kazu11max17/shieldbom/actions)
-[![Crates.io](https://img.shields.io/crates/v/shieldbom.svg)](https://crates.io/crates/shieldbom)
+[![Crates.io](https://img.shields.io/crates/v/shieldbom-cli.svg)](https://crates.io/crates/shieldbom-cli)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 ---
@@ -36,7 +36,7 @@ ShieldBOM parses SBOM files (SPDX, CycloneDX), matches components against known 
 ### Installation
 
 ```bash
-cargo install shieldbom
+cargo install shieldbom-cli
 ```
 
 Or build from source:
