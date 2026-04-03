@@ -1,6 +1,7 @@
 [package]
 name = "shieldbom-cli"
 description = "CLI for ShieldBOM — SBOM vulnerability scanner and license checker for embedded/IoT software"
+readme = "../../README.md"
 keywords = ["sbom", "spdx", "cyclonedx", "vulnerability", "embedded"]
 categories = ["command-line-utilities", "development-tools"]
 version.workspace = true
