@@ -1,5 +1,5 @@
 [package]
-name = "shieldbom"
+name = "shieldbom-core"
 description = "Core library for ShieldBOM — SBOM parsing, vulnerability matching, and license checking"
 readme = "../../README.md"
 keywords = ["sbom", "spdx", "cyclonedx", "vulnerability", "embedded"]

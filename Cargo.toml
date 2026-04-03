@@ -3,12 +3,12 @@ members = ["crates/shieldbom-core", "crates/shieldbom-cli", "crates/shieldbom-se
 resolver = "2"
 
 [workspace.package]
-version = "0.1.2"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/kazu11max17/shieldbom"
 homepage = "https://github.com/kazu11max17/shieldbom"
-documentation = "https://docs.rs/shieldbom"
+documentation = "https://docs.rs/shieldbom-core"
 description = "SBOM management CLI for embedded & IoT — SPDX/CycloneDX parsing, OSV.dev vulnerability scanning, EU CRA compliance"
 
 [workspace.dependencies]
@@ -67,4 +67,4 @@ hex = "0.4"
 rand = "0.8"
 
 # Internal
-shieldbom = { version = "0.1.2", path = "crates/shieldbom-core" }
+shieldbom-core = { version = "0.2.0", path = "crates/shieldbom-core" }

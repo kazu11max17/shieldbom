@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use shieldbom::models::Severity;
-use shieldbom::report::OutputFormat;
+use shieldbom_core::models::Severity;
+use shieldbom_core::report::OutputFormat;
 
 /// ShieldBOM - SBOM vulnerability scanner for embedded/IoT software
 #[derive(Parser)]

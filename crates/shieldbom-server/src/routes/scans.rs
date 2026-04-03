@@ -5,7 +5,7 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use shieldbom::models::AnalysisReport;
+use shieldbom_core::models::AnalysisReport;
 
 use super::AccountId;
 use crate::errors::ApiError;

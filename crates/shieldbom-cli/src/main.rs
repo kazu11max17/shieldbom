@@ -28,12 +28,12 @@ async fn main() -> Result<()> {
 mod commands {
     use crate::cli::{DbArgs, DbCommands, ScanArgs, ValidateArgs}; // DbExportArgs, DbImportArgs used via DbCommands
     use anyhow::{bail, Context, Result};
-    use shieldbom::license;
-    use shieldbom::models::AnalysisReport;
-    use shieldbom::parser;
-    use shieldbom::report;
-    use shieldbom::report::OutputFormat;
-    use shieldbom::vuln;
+    use shieldbom_core::license;
+    use shieldbom_core::models::AnalysisReport;
+    use shieldbom_core::parser;
+    use shieldbom_core::report;
+    use shieldbom_core::report::OutputFormat;
+    use shieldbom_core::vuln;
 
     pub async fn scan(args: ScanArgs) -> Result<()> {
         // Validate --sync requirements upfront
@@ -170,17 +170,17 @@ mod commands {
         match args.command {
             DbCommands::Update => {
                 eprintln!("Updating vulnerability database...");
-                shieldbom::db::update().await?;
+                shieldbom_core::db::update().await?;
                 eprintln!("Database updated successfully.");
                 Ok(())
             }
             DbCommands::Info => {
-                let info = shieldbom::db::info()?;
+                let info = shieldbom_core::db::info()?;
                 println!("{info}");
                 Ok(())
             }
             DbCommands::Export(args) => {
-                let stats = shieldbom::db::export(&args.output)?;
+                let stats = shieldbom_core::db::export(&args.output)?;
                 eprintln!("Database exported successfully.");
                 eprintln!("  Output:       {}", args.output.display());
                 eprintln!("  CVE records:  {}", stats.total_records);
@@ -190,7 +190,7 @@ mod commands {
                 Ok(())
             }
             DbCommands::Import(args) => {
-                let stats = shieldbom::db::import(&args.file)?;
+                let stats = shieldbom_core::db::import(&args.file)?;
                 eprintln!("Database imported successfully.");
                 eprintln!("  Source:       {}", args.file.display());
                 eprintln!("  CVE records:  {}", stats.total_records);

@@ -1,5 +1,5 @@
 [package]
-name = "shieldbom-cli"
+name = "shieldbom"
 description = "CLI for ShieldBOM — SBOM vulnerability scanner and license checker for embedded/IoT software"
 readme = "../../README.md"
 keywords = ["sbom", "spdx", "cyclonedx", "vulnerability", "embedded"]
@@ -14,7 +14,7 @@ name = "shieldbom"
 path = "src/main.rs"
 
 [dependencies]
-shieldbom = { workspace = true }
+shieldbom-core = { workspace = true }
 clap = { workspace = true }
 tabled = { workspace = true }
 colored = { workspace = true }
