@@ -52,6 +52,15 @@ struct SarifRun {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<SarifArtifact>,
     results: Vec<SarifResult>,
+    /// Run-level properties (disclaimer, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    properties: Option<SarifRunPropertyBag>,
+}
+
+/// Property bag for run-level metadata.
+#[derive(Debug, Serialize, PartialEq)]
+struct SarifRunPropertyBag {
+    disclaimer: String,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -274,6 +283,9 @@ impl SarifLog {
                 },
                 artifacts,
                 results,
+                properties: Some(SarifRunPropertyBag {
+                    disclaimer: report.disclaimer.clone(),
+                }),
             }],
         }
     }

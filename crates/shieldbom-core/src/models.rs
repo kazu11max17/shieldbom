@@ -160,6 +160,7 @@ pub struct AnalysisReport {
     pub license_issues: Vec<LicenseIssue>,
     pub stats: AnalysisStats,
     pub timestamp: DateTime<Utc>,
+    pub disclaimer: String,
 }
 
 impl AnalysisReport {
@@ -179,6 +180,7 @@ impl AnalysisReport {
             license_issues,
             stats,
             timestamp: Utc::now(),
+            disclaimer: crate::report::DISCLAIMER.to_string(),
         }
     }
 

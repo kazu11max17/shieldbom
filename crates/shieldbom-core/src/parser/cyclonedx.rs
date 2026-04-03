@@ -56,7 +56,16 @@ struct CdxHash {
     content: Option<String>,
 }
 
+const MAX_SBOM_SIZE: usize = 50 * 1024 * 1024; // 50MB
+
 pub fn parse_json(content: &str) -> Result<ParsedSbom> {
+    if content.len() > MAX_SBOM_SIZE {
+        return Err(crate::errors::ShieldBomError::ParseError(
+            "SBOM file exceeds maximum size of 50MB".to_string(),
+        )
+        .into());
+    }
+
     let doc: CdxDocument = serde_json::from_str(content)
         .map_err(|e| crate::errors::ShieldBomError::ParseError(format!("CycloneDX JSON: {e}")))?;
 
@@ -78,7 +87,34 @@ pub fn parse_json(content: &str) -> Result<ParsedSbom> {
 }
 
 pub fn parse_xml(content: &str) -> Result<ParsedSbom> {
-    // For XML, we use a simplified approach: deserialize via quick-xml
+    // Security: quick-xml 0.36 does not support DTD processing or external entity
+    // expansion, making it inherently safe against XXE and Billion Laughs attacks.
+    // As defense-in-depth we also reject documents containing DOCTYPE declarations
+    // and enforce a maximum input size.
+
+    if content.len() > MAX_SBOM_SIZE {
+        return Err(crate::errors::ShieldBomError::ParseError(
+            "SBOM file exceeds maximum size of 50MB".to_string(),
+        )
+        .into());
+    }
+
+    // Defense-in-depth: reject any input that contains a DOCTYPE or ENTITY declaration.
+    // Even though quick-xml ignores DTDs, blocking them outright prevents future
+    // regressions or parser-swap surprises.
+    fn contains_ci(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack
+            .windows(needle.len())
+            .any(|w| w.eq_ignore_ascii_case(needle))
+    }
+    if contains_ci(content.as_bytes(), b"<!DOCTYPE") || contains_ci(content.as_bytes(), b"<!ENTITY")
+    {
+        return Err(crate::errors::ShieldBomError::ParseError(
+            "XML DOCTYPE/ENTITY declarations are not allowed for security reasons".to_string(),
+        )
+        .into());
+    }
+
     let doc: CdxXmlDocument = quick_xml::de::from_str(content)
         .map_err(|e| crate::errors::ShieldBomError::ParseError(format!("CycloneDX XML: {e}")))?;
 
@@ -199,4 +235,52 @@ struct CdxXmlLicenses {
 struct CdxXmlLicense {
     id: Option<String>,
     name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_xml_rejects_doctype() {
+        let xml = r#"<?xml version="1.0"?>
+<!DOCTYPE bom [<!ENTITY xxe "test">]>
+<bom xmlns="http://cyclonedx.org/schema/bom/1.4">
+  <components/>
+</bom>"#;
+        let err = parse_xml(xml).unwrap_err();
+        assert!(err.to_string().contains("DOCTYPE/ENTITY"));
+    }
+
+    #[test]
+    fn parse_xml_rejects_entity() {
+        let xml = r#"<?xml version="1.0"?>
+<!ENTITY xxe SYSTEM "file:///etc/passwd">
+<bom xmlns="http://cyclonedx.org/schema/bom/1.4">
+  <components/>
+</bom>"#;
+        let err = parse_xml(xml).unwrap_err();
+        assert!(err.to_string().contains("DOCTYPE/ENTITY"));
+    }
+
+    #[test]
+    fn parse_xml_rejects_doctype_mixed_case() {
+        let xml = "<!DocType foo><bom></bom>";
+        let err = parse_xml(xml).unwrap_err();
+        assert!(err.to_string().contains("DOCTYPE/ENTITY"));
+    }
+
+    #[test]
+    fn parse_xml_rejects_oversized_input() {
+        let big = "x".repeat(51 * 1024 * 1024);
+        let err = parse_xml(&big).unwrap_err();
+        assert!(err.to_string().contains("50MB"));
+    }
+
+    #[test]
+    fn parse_json_rejects_oversized_input() {
+        let big = "x".repeat(51 * 1024 * 1024);
+        let err = parse_json(&big).unwrap_err();
+        assert!(err.to_string().contains("50MB"));
+    }
 }

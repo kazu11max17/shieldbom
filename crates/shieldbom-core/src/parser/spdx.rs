@@ -48,7 +48,16 @@ struct SpdxChecksum {
     checksum_value: Option<String>,
 }
 
+const MAX_SBOM_SIZE: usize = 50 * 1024 * 1024; // 50MB
+
 pub fn parse_json(content: &str) -> Result<ParsedSbom> {
+    if content.len() > MAX_SBOM_SIZE {
+        return Err(crate::errors::ShieldBomError::ParseError(
+            "SBOM file exceeds maximum size of 50MB".to_string(),
+        )
+        .into());
+    }
+
     let doc: SpdxDocument = serde_json::from_str(content)
         .map_err(|e| crate::errors::ShieldBomError::ParseError(format!("SPDX JSON: {e}")))?;
 
@@ -100,6 +109,13 @@ pub fn parse_json(content: &str) -> Result<ParsedSbom> {
 }
 
 pub fn parse_tag_value(content: &str) -> Result<ParsedSbom> {
+    if content.len() > MAX_SBOM_SIZE {
+        return Err(crate::errors::ShieldBomError::ParseError(
+            "SBOM file exceeds maximum size of 50MB".to_string(),
+        )
+        .into());
+    }
+
     let mut components = Vec::new();
     let mut current: Option<TagValueBuilder> = None;
 

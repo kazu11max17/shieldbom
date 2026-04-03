@@ -7,6 +7,9 @@ use colored::Colorize;
 
 use crate::models::{AnalysisReport, Severity};
 
+/// Disclaimer text included in all output formats.
+pub const DISCLAIMER: &str = "DISCLAIMER: This report is provided \"AS IS\" without warranty of any kind. Vulnerability results are based on publicly available data sources (e.g., OSV.dev, NVD) which may be incomplete or delayed. The absence of reported vulnerabilities does not guarantee that the software is free of security issues. This tool assists with security analysis but does not constitute a complete security assessment, legal advice, or certification of regulatory compliance (including EU CRA conformity). Users are solely responsible for their own compliance determinations. Always perform additional security assessments as appropriate.";
+
 /// Truncate a string at a safe UTF-8 char boundary.
 fn truncate_str(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
@@ -49,7 +52,18 @@ pub fn render(report: &AnalysisReport, format: OutputFormat) -> Result<()> {
             println!("{output}");
             Ok(())
         }
+    }?;
+
+    // Print disclaimer to stderr for all formats.
+    // For structured outputs (JSON, SARIF) this avoids corrupting stdout.
+    // For table output, render_table already prints it, so we skip.
+    // For HTML/CRA, the disclaimer is embedded in the template footer AND printed to stderr.
+    match format {
+        OutputFormat::Table => {} // already printed inside render_table
+        _ => eprintln!("\n{}", report.disclaimer),
     }
+
+    Ok(())
 }
 
 fn render_table(report: &AnalysisReport) -> Result<()> {
@@ -118,6 +132,8 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
     if report.vulnerabilities.is_empty() && report.license_issues.is_empty() {
         println!("{}", "No issues found.".green().bold());
     }
+
+    eprintln!("\n{DISCLAIMER}");
 
     Ok(())
 }

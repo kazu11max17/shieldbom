@@ -7,7 +7,17 @@ use shieldbom::report::OutputFormat;
 
 /// ShieldBOM - SBOM vulnerability scanner for embedded/IoT software
 #[derive(Parser)]
-#[command(name = "shieldbom", version, about, long_about = None)]
+#[command(
+    name = "shieldbom",
+    version,
+    about,
+    long_about = None,
+    after_help = "\
+EXIT CODES:
+    0    No vulnerabilities or license issues found above threshold
+    1    Vulnerabilities or license issues found above threshold
+    2    Error (invalid input, parse failure, network error)"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
