@@ -65,21 +65,12 @@ pub struct VersionRangeInfo {
 }
 
 /// Affected version information combining human-readable display and structured ranges.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AffectedVersions {
     /// Human-readable representation (e.g. ">=1.0.0, <2.0.0").
     pub display: String,
     /// Structured version ranges for programmatic use.
     pub ranges: Vec<VersionRangeInfo>,
-}
-
-impl Default for AffectedVersions {
-    fn default() -> Self {
-        Self {
-            display: String::new(),
-            ranges: Vec::new(),
-        }
-    }
 }
 
 impl AffectedVersions {
