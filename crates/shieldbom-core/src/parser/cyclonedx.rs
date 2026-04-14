@@ -138,7 +138,7 @@ pub fn parse_xml(content: &str) -> Result<ParsedSbom> {
                 .collect();
 
             Component {
-                name: c.name,
+                name: super::sanitize_component_name(&c.name),
                 version: c.version.unwrap_or_default(),
                 supplier: c.supplier.and_then(|s| s.name),
                 cpe: c.cpe,
@@ -183,7 +183,7 @@ fn convert_cdx_component(c: CdxComponent, format: SourceFormat) -> Component {
         .collect();
 
     Component {
-        name: c.name,
+        name: super::sanitize_component_name(&c.name),
         version: c.version.unwrap_or_default(),
         supplier: c.supplier.and_then(|s| s.name),
         cpe: c.cpe,

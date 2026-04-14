@@ -130,6 +130,11 @@ fn merge_vuln_match(existing: &mut VulnMatch, incoming: &VulnMatch) {
     // Use non-empty affected_versions
     if existing.affected_versions.is_empty() && !incoming.affected_versions.is_empty() {
         existing.affected_versions = incoming.affected_versions.clone();
+    } else if !incoming.affected_versions.ranges.is_empty()
+        && existing.affected_versions.ranges.is_empty()
+    {
+        // Prefer structured ranges even if display is non-empty
+        existing.affected_versions.ranges = incoming.affected_versions.ranges.clone();
     }
 
     // Mark source as merged (prefer showing original primary source)
@@ -143,7 +148,7 @@ fn merge_vuln_match(existing: &mut VulnMatch, incoming: &VulnMatch) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::Severity;
+    use crate::models::{AffectedVersions, Severity};
 
     fn make_vuln(
         component: &str,
@@ -160,7 +165,7 @@ mod tests {
             severity: cvss.map(Severity::from_cvss).unwrap_or(Severity::Unknown),
             cvss_score: cvss,
             source,
-            affected_versions: String::new(),
+            affected_versions: AffectedVersions::default(),
             fixed_version: fixed.map(|s| s.to_string()),
             description: desc.to_string(),
         }

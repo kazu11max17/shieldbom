@@ -1,7 +1,6 @@
 use thiserror::Error;
 
 #[derive(Error, Debug)]
-#[allow(dead_code)]
 pub enum ShieldBomError {
     #[error("Unsupported SBOM format: {0}")]
     UnsupportedFormat(String),
@@ -17,4 +16,13 @@ pub enum ShieldBomError {
 
     #[error("File not found: {0}")]
     FileNotFound(String),
+
+    #[error("Input file too large: {0} bytes (max 50 MB)")]
+    InputTooLarge(u64),
+
+    #[error("Too many components: {0} (max 100,000)")]
+    TooManyComponents(usize),
+
+    #[error("Potentially malicious XML: {0}")]
+    MaliciousXml(String),
 }

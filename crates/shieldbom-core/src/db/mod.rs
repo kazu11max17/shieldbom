@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 use rusqlite::{params, Connection};
 
 use crate::errors::ShieldBomError;
-use crate::models::{Component, Severity, VulnMatch, VulnSource};
+use crate::models::{AffectedVersions, Component, Severity, VulnMatch, VulnSource};
 
 /// Default DB directory and file
 const DB_DIR: &str = ".shieldbom";
@@ -824,7 +824,10 @@ fn vuln_row_to_match(vr: &VulnRow, component: &Component) -> VulnMatch {
         severity,
         cvss_score: vr.score,
         source: VulnSource::LocalDb,
-        affected_versions: vr.affected_versions.clone(),
+        affected_versions: AffectedVersions {
+            display: vr.affected_versions.clone(),
+            ranges: vec![],
+        },
         fixed_version: None,
         description: vr.summary.clone(),
     }

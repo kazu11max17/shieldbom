@@ -118,8 +118,8 @@ struct TemplateLicenseIssue {
 mod tests {
     use super::*;
     use crate::models::{
-        AnalysisReport, Component, Hash, LicenseIssue, LicenseIssueType, Severity, SourceFormat,
-        VulnMatch, VulnSource,
+        AffectedVersions, AnalysisReport, Component, Hash, LicenseIssue, LicenseIssueType,
+        Severity, SourceFormat, VulnMatch, VulnSource,
     };
     use std::path::PathBuf;
 
@@ -157,7 +157,10 @@ mod tests {
             severity: Severity::High,
             cvss_score: Some(9.8),
             source: VulnSource::Osv,
-            affected_versions: "<1.1.1l".to_string(),
+            affected_versions: AffectedVersions {
+                display: "<1.1.1l".to_string(),
+                ranges: vec![],
+            },
             fixed_version: Some("1.1.1l".to_string()),
             description: "SM2 Decryption Buffer Overflow".to_string(),
         }];
@@ -259,7 +262,10 @@ mod tests {
             severity: Severity::Critical,
             cvss_score: Some(10.0),
             source: VulnSource::Osv,
-            affected_versions: "*".to_string(),
+            affected_versions: AffectedVersions {
+                display: "*".to_string(),
+                ranges: vec![],
+            },
             fixed_version: None,
             description: long_desc.clone(),
         }];
@@ -297,7 +303,10 @@ mod tests {
                 severity,
                 cvss_score: Some(5.0),
                 source: VulnSource::Osv,
-                affected_versions: "*".to_string(),
+                affected_versions: AffectedVersions {
+                    display: "*".to_string(),
+                    ranges: vec![],
+                },
                 fixed_version: None,
                 description: "test".to_string(),
             }];

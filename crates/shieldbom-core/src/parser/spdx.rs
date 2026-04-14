@@ -90,7 +90,7 @@ pub fn parse_json(content: &str) -> Result<ParsedSbom> {
                 .collect();
 
             Component {
-                name: pkg.name,
+                name: super::sanitize_component_name(&pkg.name),
                 version: pkg.version_info.unwrap_or_default(),
                 supplier: pkg.supplier,
                 cpe,
@@ -228,7 +228,7 @@ impl TagValueBuilder {
 
     fn build(self) -> Component {
         Component {
-            name: self.name,
+            name: super::sanitize_component_name(&self.name),
             version: self.version.unwrap_or_default(),
             supplier: self.supplier,
             cpe: self.cpe,

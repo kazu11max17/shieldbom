@@ -1,7 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::models::{Component, Severity, VulnMatch, VulnSource};
+use crate::models::{
+    AffectedVersions, Component, Severity, VersionRangeInfo, VulnMatch, VulnSource,
+};
 
 const OSV_API_URL: &str = "https://api.osv.dev/v1/query";
 
@@ -115,6 +117,7 @@ pub async fn query_batch(components: &[&Component]) -> Result<Vec<VulnMatch>> {
 fn convert_osv_vuln(vuln: &OsvVuln, component: &Component) -> VulnMatch {
     let (severity, cvss_score) = extract_severity(vuln);
     let fixed_version = extract_fixed_version(vuln);
+    let affected_versions = extract_affected_versions(vuln);
 
     // Use CVE alias as the ID if available, otherwise use the OSV ID.
     // This enables proper deduplication with NVD results.
@@ -132,9 +135,50 @@ fn convert_osv_vuln(vuln: &OsvVuln, component: &Component) -> VulnMatch {
         severity,
         cvss_score,
         source: VulnSource::Osv,
-        affected_versions: String::new(),
+        affected_versions,
         fixed_version,
         description: vuln.summary.clone(),
+    }
+}
+
+/// Extract structured affected version information from OSV affected ranges.
+fn extract_affected_versions(vuln: &OsvVuln) -> AffectedVersions {
+    let mut ranges = Vec::new();
+    let mut display_parts = Vec::new();
+
+    for affected in &vuln.affected {
+        for range in &affected.ranges {
+            let mut introduced: Option<String> = None;
+            let mut fixed: Option<String> = None;
+
+            for event in &range.events {
+                if let Some(ref i) = event.introduced {
+                    introduced = Some(i.clone());
+                }
+                if let Some(ref f) = event.fixed {
+                    fixed = Some(f.clone());
+                }
+            }
+
+            // Only add if we have at least one piece of range info
+            if introduced.is_some() || fixed.is_some() {
+                // Build display string for this range
+                let display = match (&introduced, &fixed) {
+                    (Some(i), Some(f)) => format!(">={}, <{}", i, f),
+                    (Some(i), None) => format!(">={}", i),
+                    (None, Some(f)) => format!("<{}", f),
+                    (None, None) => unreachable!(),
+                };
+                display_parts.push(display);
+
+                ranges.push(VersionRangeInfo { introduced, fixed });
+            }
+        }
+    }
+
+    AffectedVersions {
+        display: display_parts.join("; "),
+        ranges,
     }
 }
 

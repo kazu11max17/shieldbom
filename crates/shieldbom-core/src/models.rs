@@ -55,6 +55,40 @@ pub struct ParsedSbom {
     pub components: Vec<Component>,
 }
 
+/// Structured version range information for programmatic use.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VersionRangeInfo {
+    /// Version where the vulnerability was introduced (e.g. "1.0.0").
+    pub introduced: Option<String>,
+    /// Version where the vulnerability was fixed (e.g. "2.0.0").
+    pub fixed: Option<String>,
+}
+
+/// Affected version information combining human-readable display and structured ranges.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AffectedVersions {
+    /// Human-readable representation (e.g. ">=1.0.0, <2.0.0").
+    pub display: String,
+    /// Structured version ranges for programmatic use.
+    pub ranges: Vec<VersionRangeInfo>,
+}
+
+impl Default for AffectedVersions {
+    fn default() -> Self {
+        Self {
+            display: String::new(),
+            ranges: Vec::new(),
+        }
+    }
+}
+
+impl AffectedVersions {
+    /// Returns true if no range information is available.
+    pub fn is_empty(&self) -> bool {
+        self.display.is_empty() && self.ranges.is_empty()
+    }
+}
+
 /// Vulnerability matched against a component
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VulnMatch {
@@ -64,7 +98,7 @@ pub struct VulnMatch {
     pub severity: Severity,
     pub cvss_score: Option<f64>,
     pub source: VulnSource,
-    pub affected_versions: String,
+    pub affected_versions: AffectedVersions,
     pub fixed_version: Option<String>,
     pub description: String,
 }

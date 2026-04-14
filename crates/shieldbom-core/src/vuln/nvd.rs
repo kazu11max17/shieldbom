@@ -4,7 +4,9 @@ use std::time::Duration;
 use anyhow::Result;
 use serde::Deserialize;
 
-use crate::models::{Component, Severity, VulnMatch, VulnSource};
+use crate::models::{
+    AffectedVersions, Component, Severity, VersionRangeInfo, VulnMatch, VulnSource,
+};
 use crate::version::{fuzzy_vendor_match, parse_cpe_parts, SemVer, VersionRange};
 
 const NVD_API_URL: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
@@ -330,7 +332,10 @@ fn convert_nvd_cve(cve: &NvdCve, component: &Component) -> VulnMatch {
         severity,
         cvss_score,
         source: VulnSource::Nvd,
-        affected_versions,
+        affected_versions: AffectedVersions {
+            display: affected_versions.display,
+            ranges: affected_versions.ranges,
+        },
         fixed_version,
         description,
     }
@@ -360,8 +365,9 @@ fn extract_description(cve: &NvdCve) -> String {
 }
 
 /// Extract affected version range and fixed version from NVD configuration data.
-fn extract_version_info(cve: &NvdCve, component: &Component) -> (String, Option<String>) {
-    let mut affected_ranges = Vec::new();
+fn extract_version_info(cve: &NvdCve, component: &Component) -> (AffectedVersions, Option<String>) {
+    let mut display_parts = Vec::new();
+    let mut ranges = Vec::new();
     let mut fixed_version: Option<String> = None;
 
     for config in &cve.configurations {
@@ -378,8 +384,17 @@ fn extract_version_info(cve: &NvdCve, component: &Component) -> (String, Option<
                 // Build a human-readable affected range
                 let range_str = build_range_string(cpe_match);
                 if !range_str.is_empty() {
-                    affected_ranges.push(range_str);
+                    display_parts.push(range_str);
                 }
+
+                // Build structured range info
+                ranges.push(VersionRangeInfo {
+                    introduced: cpe_match
+                        .version_start_including
+                        .clone()
+                        .or_else(|| cpe_match.version_start_excluding.clone()),
+                    fixed: cpe_match.version_end_excluding.clone(),
+                });
 
                 // The versionEndExcluding is often the fix version
                 if fixed_version.is_none() {
@@ -391,7 +406,10 @@ fn extract_version_info(cve: &NvdCve, component: &Component) -> (String, Option<
         }
     }
 
-    let affected = affected_ranges.join("; ");
+    let affected = AffectedVersions {
+        display: display_parts.join("; "),
+        ranges,
+    };
     (affected, fixed_version)
 }
 

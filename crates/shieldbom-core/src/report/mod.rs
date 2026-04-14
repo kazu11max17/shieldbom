@@ -10,6 +10,29 @@ use crate::models::{AnalysisReport, Severity};
 /// Disclaimer text included in all output formats.
 pub const DISCLAIMER: &str = "DISCLAIMER: This report is provided \"AS IS\" without warranty of any kind. Vulnerability results are based on publicly available data sources (e.g., OSV.dev, NVD) which may be incomplete or delayed. The absence of reported vulnerabilities does not guarantee that the software is free of security issues. This tool assists with security analysis but does not constitute a complete security assessment, legal advice, or certification of regulatory compliance (including EU CRA conformity). Users are solely responsible for their own compliance determinations. Always perform additional security assessments as appropriate.";
 
+/// Strip ANSI escape sequences from a string.
+///
+/// Removes sequences like `\x1b[31m`, `\x1b[0m`, etc. that could be injected
+/// via malicious component names to manipulate terminal output.
+fn strip_ansi(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for ch in s.chars() {
+        if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+        if ch == '\x1b' {
+            in_escape = true;
+            continue;
+        }
+        result.push(ch);
+    }
+    result
+}
+
 /// Truncate a string at a safe UTF-8 char boundary.
 fn truncate_str(s: &str, max_chars: usize) -> String {
     let mut chars = s.chars();
@@ -97,13 +120,15 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
                 _ => vuln.severity.to_string().normal(),
             };
 
+            let safe_name = strip_ansi(&vuln.component_name);
+            let safe_version = strip_ansi(&vuln.component_version);
             println!(
                 "  [{severity_str}] {} {} @ {}",
-                vuln.cve_id, vuln.component_name, vuln.component_version
+                vuln.cve_id, safe_name, safe_version
             );
             if !vuln.description.is_empty() {
-                // Truncate long descriptions
-                let desc = truncate_str(&vuln.description, 100);
+                // Truncate long descriptions, strip ANSI from untrusted input
+                let desc = truncate_str(&strip_ansi(&vuln.description), 100);
                 println!("    {}", desc.dimmed());
             }
             if let Some(fixed) = &vuln.fixed_version {
@@ -121,9 +146,9 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
             println!(
                 "  [{}] {} @ {} - {}",
                 issue.issue_type.to_string().yellow(),
-                issue.component_name,
-                issue.component_version,
-                issue.description
+                strip_ansi(&issue.component_name),
+                strip_ansi(&issue.component_version),
+                strip_ansi(&issue.description)
             );
         }
         println!();
@@ -153,4 +178,32 @@ fn render_json(report: &AnalysisReport) -> Result<()> {
     let json = serde_json::to_string_pretty(report)?;
     println!("{json}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_strip_ansi_removes_escape_sequences() {
+        assert_eq!(strip_ansi("\x1b[31mred text\x1b[0m"), "red text");
+        assert_eq!(strip_ansi("\x1b[1;32mbold green\x1b[0m"), "bold green");
+        assert_eq!(strip_ansi("no escapes here"), "no escapes here");
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_nested() {
+        assert_eq!(
+            strip_ansi("before\x1b[31m\x1b[1minner\x1b[0mafter"),
+            "beforeinnerafter"
+        );
+    }
+
+    #[test]
+    fn test_truncate_str_safe() {
+        assert_eq!(truncate_str("hello", 10), "hello");
+        assert_eq!(truncate_str("hello world", 5), "hello...");
+        assert_eq!(truncate_str("日本語テスト", 3), "日本語...");
+    }
 }

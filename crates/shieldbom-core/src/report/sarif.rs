@@ -335,10 +335,10 @@ fn build_result(
             cvss_score: vuln.cvss_score,
             severity: Some(vuln.severity.to_string()),
             source: Some(vuln.source.to_string()),
-            affected_versions: if vuln.affected_versions.is_empty() {
+            affected_versions: if vuln.affected_versions.display.is_empty() {
                 None
             } else {
-                Some(vuln.affected_versions.clone())
+                Some(vuln.affected_versions.display.clone())
             },
             fixed_version: vuln.fixed_version.clone(),
             component_name: Some(vuln.component_name.clone()),
@@ -355,7 +355,8 @@ fn build_result(
 mod tests {
     use super::*;
     use crate::models::{
-        AnalysisReport, Component, Hash, Severity, SourceFormat, VulnMatch, VulnSource,
+        AffectedVersions, AnalysisReport, Component, Hash, Severity, SourceFormat,
+        VersionRangeInfo, VulnMatch, VulnSource,
     };
     use std::path::PathBuf;
 
@@ -403,7 +404,13 @@ mod tests {
             severity: Severity::Critical,
             cvss_score: Some(9.8),
             source: VulnSource::Osv,
-            affected_versions: "< 1.1.1l".to_string(),
+            affected_versions: AffectedVersions {
+                display: "< 1.1.1l".to_string(),
+                ranges: vec![VersionRangeInfo {
+                    introduced: Some("0".to_string()),
+                    fixed: Some("1.1.1l".to_string()),
+                }],
+            },
             fixed_version: Some("1.1.1l".to_string()),
             description: "SM2 decryption buffer overflow in OpenSSL".to_string(),
         }
@@ -417,7 +424,13 @@ mod tests {
             severity: Severity::Medium,
             cvss_score: Some(5.5),
             source: VulnSource::Nvd,
-            affected_versions: "< 1.2.12".to_string(),
+            affected_versions: AffectedVersions {
+                display: "< 1.2.12".to_string(),
+                ranges: vec![VersionRangeInfo {
+                    introduced: None,
+                    fixed: Some("1.2.12".to_string()),
+                }],
+            },
             fixed_version: Some("1.2.12".to_string()),
             description: "Heap-based buffer over-read in zlib inflate".to_string(),
         }
