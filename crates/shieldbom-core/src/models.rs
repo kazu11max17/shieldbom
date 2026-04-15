@@ -92,6 +92,10 @@ pub struct VulnMatch {
     pub affected_versions: AffectedVersions,
     pub fixed_version: Option<String>,
     pub description: String,
+    /// Whether this CVE is in the CISA Known Exploited Vulnerabilities catalog.
+    pub in_kev: bool,
+    /// CISA KEV remediation due date (if applicable).
+    pub kev_due_date: Option<chrono::NaiveDate>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]

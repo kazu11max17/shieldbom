@@ -36,6 +36,12 @@ tera = "1"
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 
+# Version comparison
+semver = { version = "1", features = ["serde"] }
+
+# Compression (OSV data dump)
+flate2 = "1"
+
 # Error handling
 thiserror = "1"
 anyhow = "1"

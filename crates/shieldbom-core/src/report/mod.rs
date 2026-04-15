@@ -131,6 +131,14 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
                 let desc = truncate_str(&strip_ansi(&vuln.description), 100);
                 println!("    {}", desc.dimmed());
             }
+            if vuln.in_kev {
+                let kev_label = if let Some(due) = vuln.kev_due_date {
+                    format!("    ⚠ CISA KEV — actively exploited, remediation due {due}")
+                } else {
+                    "    ⚠ CISA KEV — actively exploited in the wild".to_string()
+                };
+                println!("{}", kev_label.red().bold());
+            }
             if let Some(fixed) = &vuln.fixed_version {
                 println!("    Fix: upgrade to {}", fixed.green());
             }

@@ -413,6 +413,8 @@ mod tests {
             },
             fixed_version: Some("1.1.1l".to_string()),
             description: "SM2 decryption buffer overflow in OpenSSL".to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }
     }
 
@@ -433,6 +435,8 @@ mod tests {
             },
             fixed_version: Some("1.2.12".to_string()),
             description: "Heap-based buffer over-read in zlib inflate".to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }
     }
 

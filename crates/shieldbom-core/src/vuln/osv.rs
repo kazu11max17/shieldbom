@@ -138,6 +138,8 @@ fn convert_osv_vuln(vuln: &OsvVuln, component: &Component) -> VulnMatch {
         affected_versions,
         fixed_version,
         description: vuln.summary.clone(),
+        in_kev: false,
+        kev_due_date: None,
     }
 }
 

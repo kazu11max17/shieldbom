@@ -21,6 +21,10 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             archive: tar.gz
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+            use_cross: true
           - target: aarch64-apple-darwin
             os: macos-latest
             archive: tar.gz
@@ -39,7 +43,16 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Build (cross)
+        if: matrix.use_cross
+        run: cross build --release --target ${{ matrix.target }}
+
       - name: Build
+        if: "!matrix.use_cross"
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (Unix)

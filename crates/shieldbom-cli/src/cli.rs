@@ -60,6 +60,10 @@ pub struct ScanArgs {
     #[arg(long)]
     pub db: Option<PathBuf>,
 
+    /// Allow scanning with a stale local database (suppresses the >30 day error)
+    #[arg(long)]
+    pub allow_stale: bool,
+
     /// Upload scan results to ShieldBOM server
     #[arg(long)]
     pub sync: bool,

@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
 mod commands {
     use crate::cli::{DbArgs, DbCommands, ScanArgs, ValidateArgs}; // DbExportArgs, DbImportArgs used via DbCommands
     use anyhow::{bail, Context, Result};
+    use shieldbom_core::db;
     use shieldbom_core::license;
     use shieldbom_core::models::AnalysisReport;
     use shieldbom_core::parser;
@@ -42,6 +43,26 @@ mod commands {
                 "--sync requires an API key. Set --api-key or SHIELDBOM_API_KEY environment variable.\n\
                  Register at your ShieldBOM server: POST /api/v1/auth/register"
             );
+        }
+
+        // DB staleness check (offline mode only; online mode uses live APIs)
+        if args.offline {
+            match db::staleness_days() {
+                Some(days) if days >= 30 && !args.allow_stale => {
+                    eprintln!(
+                        "Error: Vulnerability database is {days} days old (last updated >30 days ago).\n\
+                         Run 'shieldbom db update' to refresh, or pass --allow-stale to override."
+                    );
+                    std::process::exit(2);
+                }
+                Some(days) if days >= 7 => {
+                    eprintln!(
+                        "Warning: Vulnerability database is {days} days old. \
+                         Run 'shieldbom db update' to refresh."
+                    );
+                }
+                _ => {}
+            }
         }
 
         let sbom = match parser::parse_sbom(&args.file) {

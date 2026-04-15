@@ -314,6 +314,8 @@ mod tests {
             },
             fixed_version: Some("1.1.1l".to_string()),
             description: "SM2 Decryption Buffer Overflow".to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }];
 
         let license_issues = vec![LicenseIssue {
@@ -517,6 +519,8 @@ mod tests {
             },
             fixed_version: None,
             description: "Test vulnerability".to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }];
 
         let report = AnalysisReport::new(
@@ -628,6 +632,8 @@ mod tests {
             },
             fixed_version: None,
             description: "Critical issue".to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }];
 
         let report = AnalysisReport::new(

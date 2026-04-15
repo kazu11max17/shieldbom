@@ -338,6 +338,8 @@ fn convert_nvd_cve(cve: &NvdCve, component: &Component) -> VulnMatch {
         },
         fixed_version,
         description,
+        in_kev: false,
+        kev_due_date: None,
     }
 }
 

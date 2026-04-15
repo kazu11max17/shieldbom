@@ -1,3 +1,4 @@
+mod kev;
 mod nvd;
 mod osv;
 
@@ -66,7 +67,23 @@ pub async fn match_vulnerabilities(
     }
 
     // Step 3: Smart deduplication - merge results from multiple sources
-    let merged = deduplicate_vulns(all_vulns);
+    let mut merged = deduplicate_vulns(all_vulns);
+
+    // Step 4: Enrich with CISA KEV catalog (best-effort; non-fatal on failure)
+    match kev::fetch_kev_lookup().await {
+        Ok(kev_map) => {
+            for vuln in &mut merged {
+                if let Some(due_date) = kev_map.get(&vuln.cve_id) {
+                    vuln.in_kev = true;
+                    vuln.kev_due_date = Some(*due_date);
+                }
+            }
+            tracing::debug!("KEV catalog loaded ({} entries)", kev_map.len());
+        }
+        Err(e) => {
+            tracing::warn!("Could not fetch CISA KEV catalog (continuing without KEV data): {e}");
+        }
+    }
 
     Ok(merged)
 }
@@ -168,6 +185,8 @@ mod tests {
             affected_versions: AffectedVersions::default(),
             fixed_version: fixed.map(|s| s.to_string()),
             description: desc.to_string(),
+            in_kev: false,
+            kev_due_date: None,
         }
     }
 
