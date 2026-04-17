@@ -149,7 +149,7 @@ ShieldBOM is built for this reality: offline-first, single binary, no runtime de
 
 ### EU Cyber Resilience Act (CRA)
 
-The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng), enforceable by December 2027, requires manufacturers to identify and document vulnerabilities and components of products with digital elements, including by drawing up an SBOM (Annex I, Part II). ShieldBOM helps you get ahead of this requirement today. CRA-specific compliance reports are planned for Phase 3.
+The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng), enforceable by December 2027, requires manufacturers to identify and document vulnerabilities and components of products with digital elements, including by drawing up an SBOM (Annex I, Part II). ShieldBOM assists with part of this compliance work — specifically, the SBOM-based vulnerability identification and component documentation requirements. Full CRA compliance involves additional obligations beyond what any single tool can address. CRA-specific compliance report generation is planned for Phase 3.
 
 ## Roadmap
 
