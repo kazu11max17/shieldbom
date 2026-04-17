@@ -31,6 +31,8 @@ pub enum Commands {
     Validate(ValidateArgs),
     /// Manage local vulnerability database
     Db(DbArgs),
+    /// Initialize ShieldBOM in the current project (generate CI config and shieldbom.toml)
+    Init(InitArgs),
     /// Show version information
     Version,
 }
@@ -79,6 +81,10 @@ pub struct ScanArgs {
         default_value = "https://api.shieldbom.com"
     )]
     pub server: String,
+
+    /// Write an SVG badge to this path after scanning
+    #[arg(long)]
+    pub badge: Option<PathBuf>,
 }
 
 impl ScanArgs {
@@ -136,4 +142,26 @@ pub struct DbExportArgs {
 pub struct DbImportArgs {
     /// Path to the database file to import
     pub file: PathBuf,
+}
+
+#[derive(clap::Args)]
+pub struct InitArgs {
+    /// CI platform to generate workflow for
+    #[arg(long, value_enum, default_value = "github")]
+    pub ci: CiPlatform,
+
+    /// Overwrite existing files
+    #[arg(long)]
+    pub force: bool,
+
+    /// Skip confirmation (non-interactive)
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+}
+
+#[derive(Clone, ValueEnum)]
+pub enum CiPlatform {
+    Github,
+    Gitlab,
+    None,
 }

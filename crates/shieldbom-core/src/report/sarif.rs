@@ -72,11 +72,22 @@ struct SarifTool {
 #[derive(Debug, Serialize, PartialEq)]
 struct SarifToolComponent {
     name: String,
+    /// Human-readable full name with version
+    #[serde(rename = "fullName")]
+    full_name: String,
     version: String,
     #[serde(rename = "semanticVersion")]
     semantic_version: String,
     #[serde(rename = "informationUri")]
     information_uri: String,
+    /// Download/install URI
+    #[serde(rename = "downloadUri")]
+    download_uri: String,
+    /// Organization name
+    organization: String,
+    /// Short description
+    #[serde(rename = "shortDescription")]
+    short_description: SarifMultiformatMessageString,
     rules: Vec<SarifReportingDescriptor>,
 }
 
@@ -275,9 +286,16 @@ impl SarifLog {
                 tool: SarifTool {
                     driver: SarifToolComponent {
                         name: TOOL_NAME.to_string(),
+                        full_name: format!("ShieldBOM {}", env!("CARGO_PKG_VERSION")),
                         version: env!("CARGO_PKG_VERSION").to_string(),
                         semantic_version: env!("CARGO_PKG_VERSION").to_string(),
                         information_uri: TOOL_URI.to_string(),
+                        download_uri: "https://crates.io/crates/shieldbom".to_string(),
+                        organization: "ShieldBOM Project".to_string(),
+                        short_description: SarifMultiformatMessageString {
+                            text: "SBOM vulnerability scanner for embedded/IoT software"
+                                .to_string(),
+                        },
                         rules,
                     },
                 },
@@ -648,6 +666,16 @@ mod tests {
         // Check that ruleIndex is present
         assert_eq!(v["runs"][0]["results"][0]["ruleIndex"], 0);
         assert_eq!(v["runs"][0]["results"][1]["ruleIndex"], 1);
+    }
+
+    #[test]
+    fn test_sarif_tool_driver_metadata() {
+        let report = sample_report(vec![]);
+        let json = to_sarif_string(&report).unwrap();
+
+        assert!(json.contains("ShieldBOM Project"));
+        assert!(json.contains("https://crates.io/crates/shieldbom"));
+        assert!(json.contains("SBOM vulnerability scanner for embedded/IoT software"));
     }
 
     #[test]

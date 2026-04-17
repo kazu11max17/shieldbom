@@ -1,4 +1,5 @@
 mod cli;
+mod init;
 
 use anyhow::Result;
 use clap::Parser;
@@ -18,6 +19,7 @@ async fn main() -> Result<()> {
         Commands::Scan(args) => commands::scan(args).await,
         Commands::Validate(args) => commands::validate(args),
         Commands::Db(args) => commands::db(args).await,
+        Commands::Init(args) => commands::init(&args),
         Commands::Version => {
             println!("shieldbom {}", env!("CARGO_PKG_VERSION"));
             Ok(())
@@ -26,7 +28,7 @@ async fn main() -> Result<()> {
 }
 
 mod commands {
-    use crate::cli::{DbArgs, DbCommands, ScanArgs, ValidateArgs}; // DbExportArgs, DbImportArgs used via DbCommands
+    use crate::cli::{DbArgs, DbCommands, InitArgs, ScanArgs, ValidateArgs}; // DbExportArgs, DbImportArgs used via DbCommands
     use anyhow::{bail, Context, Result};
     use shieldbom_core::db;
     use shieldbom_core::license;
@@ -108,6 +110,18 @@ mod commands {
         let format = args.format.unwrap_or(OutputFormat::Table);
         report::render(&analysis, format)?;
 
+        // Write SVG badge if requested
+        if let Some(badge_path) = &args.badge {
+            shieldbom_core::report::write_badge(&analysis, badge_path)?;
+            let ts = shieldbom_core::report::badge::current_utc_timestamp();
+            eprintln!("Badge written to {}", badge_path.display());
+            eprintln!("README snippet:");
+            eprintln!(
+                "  ![ShieldBOM](./{name})  <!-- last scanned: {ts} -->",
+                name = badge_path.file_name().unwrap_or_default().to_string_lossy(),
+            );
+        }
+
         // Upload to server if --sync is enabled
         if args.sync {
             let api_key = args.api_key.as_deref().unwrap();
@@ -168,6 +182,10 @@ mod commands {
         id: String,
         total_components: i64,
         total_vulns: i64,
+    }
+
+    pub fn init(args: &InitArgs) -> Result<()> {
+        crate::init::run(args)
     }
 
     pub fn validate(args: ValidateArgs) -> Result<()> {

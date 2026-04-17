@@ -1,6 +1,9 @@
+pub mod badge;
 mod cra;
 mod html;
 mod sarif;
+
+pub use badge::write_badge;
 
 use anyhow::Result;
 use colored::Colorize;
