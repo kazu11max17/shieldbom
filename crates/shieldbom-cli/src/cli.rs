@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use shieldbom_core::models::Severity;
-use shieldbom_core::report::OutputFormat;
+use shieldbom_core::report::{OutputFormat, ProductMetadata};
 
 /// ShieldBOM - SBOM vulnerability scanner for embedded/IoT software
 #[derive(Parser)]
@@ -26,7 +26,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Scan an SBOM file for vulnerabilities and license issues
-    Scan(ScanArgs),
+    Scan(Box<ScanArgs>),
     /// Validate SBOM format and completeness
     Validate(ValidateArgs),
     /// Manage local vulnerability database
@@ -85,6 +85,26 @@ pub struct ScanArgs {
     /// Write an SVG badge to this path after scanning
     #[arg(long)]
     pub badge: Option<PathBuf>,
+
+    /// Product name for the CRA report (--format cra)
+    #[arg(long, help_heading = "CRA report")]
+    pub product_name: Option<String>,
+
+    /// Product version for the CRA report (--format cra)
+    #[arg(long, help_heading = "CRA report")]
+    pub product_version: Option<String>,
+
+    /// Manufacturer name for the CRA report (--format cra)
+    #[arg(long, help_heading = "CRA report")]
+    pub manufacturer: Option<String>,
+
+    /// Security support period, e.g. "5 years from 2026-01-01" (--format cra)
+    #[arg(long, help_heading = "CRA report")]
+    pub support_period: Option<String>,
+
+    /// How security updates are delivered to users (--format cra)
+    #[arg(long, help_heading = "CRA report")]
+    pub update_mechanism: Option<String>,
 }
 
 impl ScanArgs {
@@ -96,6 +116,17 @@ impl ScanArgs {
             SeverityFilter::Low => Severity::Low,
             SeverityFilter::None => Severity::None,
         }
+    }
+
+    pub fn product_metadata(&self) -> ProductMetadata {
+        // ProductMetadata is #[non_exhaustive], so build it from Default and assign.
+        let mut meta = ProductMetadata::default();
+        meta.product_name = self.product_name.clone();
+        meta.product_version = self.product_version.clone();
+        meta.manufacturer = self.manufacturer.clone();
+        meta.support_period = self.support_period.clone();
+        meta.update_mechanism = self.update_mechanism.clone();
+        meta
     }
 }
 
@@ -164,4 +195,69 @@ pub enum CiPlatform {
     Github,
     Gitlab,
     None,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Catches duplicate long options, bad arg definitions and grouping mistakes
+    /// at test time rather than on first run.
+    #[test]
+    fn verify_cli() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn product_metadata_carries_every_cra_flag() {
+        let cli = Cli::parse_from([
+            "shieldbom",
+            "scan",
+            "sbom.spdx.json",
+            "--format",
+            "cra",
+            "--product-name",
+            "Smart Gateway",
+            "--product-version",
+            "2.4.1",
+            "--manufacturer",
+            "Acme Industrial GmbH",
+            "--support-period",
+            "5 years from 2026-01-01",
+            "--update-mechanism",
+            "Signed OTA over HTTPS",
+        ]);
+
+        let Commands::Scan(args) = cli.command else {
+            panic!("expected the scan subcommand");
+        };
+        let meta = args.product_metadata();
+
+        assert_eq!(meta.product_name.as_deref(), Some("Smart Gateway"));
+        assert_eq!(meta.product_version.as_deref(), Some("2.4.1"));
+        assert_eq!(meta.manufacturer.as_deref(), Some("Acme Industrial GmbH"));
+        assert_eq!(
+            meta.support_period.as_deref(),
+            Some("5 years from 2026-01-01")
+        );
+        assert_eq!(
+            meta.update_mechanism.as_deref(),
+            Some("Signed OTA over HTTPS")
+        );
+        assert!(meta.missing_identification().is_empty());
+    }
+
+    #[test]
+    fn cra_flags_are_optional_and_report_what_is_missing() {
+        let cli = Cli::parse_from(["shieldbom", "scan", "sbom.spdx.json", "--format", "cra"]);
+        let Commands::Scan(args) = cli.command else {
+            panic!("expected the scan subcommand");
+        };
+
+        assert_eq!(
+            args.product_metadata().missing_identification(),
+            vec!["--product-name", "--product-version", "--manufacturer"]
+        );
+    }
 }

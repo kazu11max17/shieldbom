@@ -149,22 +149,57 @@ ShieldBOM is built for this reality: offline-first, single binary, no runtime de
 
 ### EU Cyber Resilience Act (CRA)
 
-The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng), enforceable by December 2027, requires manufacturers to identify and document vulnerabilities and components of products with digital elements, including by drawing up an SBOM (Annex I, Part II). ShieldBOM assists with part of this compliance work — specifically, the SBOM-based vulnerability identification and component documentation requirements. Full CRA compliance involves additional obligations beyond what any single tool can address. CRA-specific compliance report generation is planned for Phase 3.
+The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/eli/reg/2024/2847/oj/eng) entered into force on 10 December 2024. The Article 14 obligation to report actively exploited vulnerabilities and severe incidents applies from **11 September 2026**, and the main manufacturer obligations apply from **11 December 2027**.
+
+The regulation requires manufacturers to identify and document vulnerabilities and components of products with digital elements, including by drawing up an SBOM (Annex I, Part II). ShieldBOM assists with part of this work — specifically, the SBOM-based vulnerability identification and component documentation requirements. Full CRA compliance involves additional obligations beyond what any single tool can address.
+
+`--format cra` renders an HTML report that maps your SBOM analysis onto CRA Annex I references, including a conformity checklist with the evidence behind each Pass/Fail:
+
+```bash
+shieldbom scan sbom.spdx.json --format cra \
+  --product-name "Smart Gateway" \
+  --product-version "2.4.1" \
+  --manufacturer "Acme Industrial GmbH" \
+  --support-period "5 years from 2026-01-01" \
+  --update-mechanism "Signed OTA updates over HTTPS" \
+  > cra-report.html
+```
+
+The CRA options are optional, but if any of `--product-name`, `--product-version` or `--manufacturer` is missing, the CLI warns you and the report itself carries a **DRAFT — NOT FOR COMPLIANCE USE** banner. A report without product identification cannot serve as technical documentation under Annex VII.
+
+**This report is an input to your compliance work, not a conformity assessment.** Conformity assessment is a legal procedure under Article 32 and Annex VIII, carried out by the manufacturer or a notified body — not by a tool. The report states this on its face, not just here.
+
+Statuses are deliberately conservative:
+
+| Status | Meaning |
+|--------|---------|
+| `PASS` | Determinable from the SBOM and satisfied |
+| `FAIL` | Determinable from the SBOM and not satisfied |
+| `REVIEW` | Findings exist that this tool cannot adjudicate — you decide |
+| `N/A` | Not determinable from an SBOM; requires manufacturer attestation |
+
+Two consequences worth knowing:
+
+- **Severity is not exploitability.** Annex I, Part I, point (2)(a) concerns *known exploitable* vulnerabilities, so a `PASS` is only issued when no known vulnerabilities remain. Anything listed in the [CISA KEV catalogue](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) is a `FAIL`; other findings are `REVIEW`.
+- **Running a scan is not a process.** "Vulnerability handling process in place" is always `N/A`. Annex I, Part II requires remediation without delay and regular testing, which no single scan demonstrates.
 
 ## Roadmap
 
 | Phase | Focus | Status |
 |-------|-------|--------|
-| **Phase 1** | OSS CLI: SBOM parsing, vulnerability matching, license checks | **v0.1.0 released** |
-| **Phase 2** | SaaS dashboard, CI/CD integration (GitHub Actions, GitLab CI) | Planned |
-| **Phase 3** | Embedded specialization: binary SBOM, RTOS support, EU CRA reports | Planned |
-| **Phase 4** | Platform: multi-project management, team features, API integrations | Planned |
+| **Phase 1** | OSS CLI: SBOM parsing, vulnerability matching, license checks, EU CRA reports | **Released** |
+| **Phase 2** | Embedded specialization: Yocto/Buildroot integration, binary matching | In progress |
+| **Phase 4** | SaaS dashboard, CI/CD integration (GitHub Actions, GitLab CI) | Planned |
+| **Phase 5** | Platform: fuzzing integration, SARIF aggregation, binary-to-SBOM generation | Planned |
 
-### Current limitations (Phase 1)
+(Phase 3 is customer validation, which runs alongside Phase 2 and ships nothing.)
 
-- No binary/firmware SBOM generation yet (Phase 3)
+### Current limitations
+
+- No binary/firmware SBOM generation yet (Phase 5)
 - License conflict rules are a built-in set; custom policies are not yet supported
-- No web UI or team features (Phase 2)
+- CRA report metadata is passed per invocation; there is no stored product profile yet
+- No web UI or team features (Phase 4)
 
 ## Contributing
 

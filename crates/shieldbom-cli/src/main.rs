@@ -38,7 +38,7 @@ mod commands {
     use shieldbom_core::report::OutputFormat;
     use shieldbom_core::vuln;
 
-    pub async fn scan(args: ScanArgs) -> Result<()> {
+    pub async fn scan(args: Box<ScanArgs>) -> Result<()> {
         // Validate --sync requirements upfront
         if args.sync && args.api_key.is_none() {
             bail!(
@@ -107,8 +107,23 @@ mod commands {
         );
 
         let severity = args.severity_threshold();
+        let product = args.product_metadata();
         let format = args.format.unwrap_or(OutputFormat::Table);
-        report::render(&analysis, format)?;
+
+        // An unidentified CRA report cannot serve as technical documentation.
+        // Say so loudly rather than emitting placeholders that look official.
+        if matches!(format, OutputFormat::Cra) {
+            let missing = product.missing_identification();
+            if !missing.is_empty() {
+                eprintln!(
+                    "Warning: incomplete product identification ({} missing). The CRA report \
+                     will contain placeholders and is marked as not suitable for compliance use.",
+                    missing.join(", ")
+                );
+            }
+        }
+
+        report::render_with_product(&analysis, format, &product)?;
 
         // Write SVG badge if requested
         if let Some(badge_path) = &args.badge {

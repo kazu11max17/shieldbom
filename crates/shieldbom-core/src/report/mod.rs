@@ -63,7 +63,53 @@ pub enum OutputFormat {
     Cra,
 }
 
+/// Product identification supplied by the manufacturer for the CRA report.
+///
+/// The CRA requires the technical documentation to identify the product and its
+/// manufacturer (Annex VII). Fields left as `None` fall back to explicit
+/// placeholders so that an unfilled report is obviously unfilled rather than
+/// silently claiming to describe a real product.
+#[derive(Clone, Debug, Default)]
+#[non_exhaustive]
+pub struct ProductMetadata {
+    pub product_name: Option<String>,
+    pub product_version: Option<String>,
+    pub manufacturer: Option<String>,
+    pub support_period: Option<String>,
+    pub update_mechanism: Option<String>,
+}
+
+impl ProductMetadata {
+    /// Names of the identification flags that were left unset.
+    ///
+    /// A partially filled report is more dangerous than an empty one — it looks
+    /// complete at a glance — so a single missing field is worth reporting.
+    /// Blank and whitespace-only values count as unset, matching how the CRA
+    /// renderer resolves them.
+    pub fn missing_identification(&self) -> Vec<&'static str> {
+        [
+            ("--product-name", &self.product_name),
+            ("--product-version", &self.product_version),
+            ("--manufacturer", &self.manufacturer),
+        ]
+        .into_iter()
+        .filter(|(_, value)| value.as_deref().is_none_or(|v| v.trim().is_empty()))
+        .map(|(flag, _)| flag)
+        .collect()
+    }
+}
+
 pub fn render(report: &AnalysisReport, format: OutputFormat) -> Result<()> {
+    render_with_product(report, format, &ProductMetadata::default())
+}
+
+/// Same as [`render`], but lets the caller supply product identification for the
+/// CRA report. Other formats ignore `product`.
+pub fn render_with_product(
+    report: &AnalysisReport,
+    format: OutputFormat,
+    product: &ProductMetadata,
+) -> Result<()> {
     match format {
         OutputFormat::Table => render_table(report),
         OutputFormat::Json => render_json(report),
@@ -74,7 +120,7 @@ pub fn render(report: &AnalysisReport, format: OutputFormat) -> Result<()> {
             Ok(())
         }
         OutputFormat::Cra => {
-            let output = cra::render_cra(report)?;
+            let output = cra::render_cra(report, product)?;
             println!("{output}");
             Ok(())
         }
