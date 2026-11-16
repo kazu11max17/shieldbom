@@ -228,6 +228,9 @@ struct SarifPropertyBag {
     component_name: Option<String>,
     #[serde(rename = "componentVersion", skip_serializing_if = "Option::is_none")]
     component_version: Option<String>,
+    /// Set on results matched by name only (see `VulnMatch::unconfirmed`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    unconfirmed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +290,7 @@ impl SarifLog {
                     fixed_version: None,
                     component_name: None,
                     component_version: None,
+                    unconfirmed: false,
                 }),
             });
         }
@@ -396,17 +400,27 @@ fn build_result(
     let rule_index = *rule_index_map.get(&vuln.cve_id).unwrap_or(&0);
     let level = severity_to_sarif_level(&vuln.severity);
 
-    let message_text = if let Some(ref fixed) = vuln.fixed_version {
+    let verb = if vuln.unconfirmed {
+        "may affect"
+    } else {
+        "affects"
+    };
+    let mut message_text = if let Some(ref fixed) = vuln.fixed_version {
         format!(
-            "{} affects {} @ {}. Upgrade to {} to fix.",
+            "{} {verb} {} @ {}. Upgrade to {} to fix.",
             vuln.cve_id, vuln.component_name, vuln.component_version, fixed
         )
     } else {
         format!(
-            "{} affects {} @ {}.",
+            "{} {verb} {} @ {}.",
             vuln.cve_id, vuln.component_name, vuln.component_version
         )
     };
+
+    if vuln.unconfirmed {
+        message_text.push(' ');
+        message_text.push_str(super::UNCONFIRMED_LABEL);
+    }
 
     // Physical location points to the SBOM file
     let sbom_uri = report.sbom_file.display().to_string();
@@ -440,6 +454,7 @@ fn build_result(
             fixed_version: vuln.fixed_version.clone(),
             component_name: Some(vuln.component_name.clone()),
             component_version: Some(vuln.component_version.clone()),
+            unconfirmed: vuln.unconfirmed,
         }),
     }
 }
@@ -512,6 +527,7 @@ mod tests {
             description: "SM2 decryption buffer overflow in OpenSSL".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }
     }
 
@@ -534,6 +550,7 @@ mod tests {
             description: "Heap-based buffer over-read in zlib inflate".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }
     }
 
@@ -858,5 +875,28 @@ mod tests {
             .unwrap()
             .contains("zlib1g@1:1.2.13"));
         assert_eq!(run["properties"]["unverified"][0], "zlib1g@1:1.2.13");
+    }
+
+    #[test]
+    fn test_sarif_marks_unconfirmed_result() {
+        let mut v = critical_vuln();
+        v.unconfirmed = true;
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&sample_report(vec![v])).unwrap()).unwrap();
+        let result = &json["runs"][0]["results"][0];
+        assert_eq!(result["properties"]["unconfirmed"], true);
+        let text = result["message"]["text"].as_str().unwrap();
+        assert!(text.contains("may affect"));
+        assert!(text.contains("Unconfirmed"));
+
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&sample_report(vec![critical_vuln()])).unwrap())
+                .unwrap();
+        let result = &json["runs"][0]["results"][0];
+        assert!(result["properties"].get("unconfirmed").is_none());
+        assert!(result["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains(" affects "));
     }
 }

@@ -133,6 +133,7 @@ fn build_context(report: &AnalysisReport, product: &ProductMetadata) -> Result<t
                 component_version: v.component_version.clone(),
                 description_truncated: truncate_str(&v.description, 200),
                 fixed_version: v.fixed_version.clone(),
+                unconfirmed: v.unconfirmed,
             }
         })
         .collect();
@@ -151,6 +152,7 @@ fn build_context(report: &AnalysisReport, product: &ProductMetadata) -> Result<t
     ctx.insert("scan_gap_count", &report.scan_gaps.len());
     ctx.insert("offline", &report.offline);
     ctx.insert("unverified_count", &report.unverified.len());
+    ctx.insert("unconfirmed_count", &report.stats.unconfirmed);
 
     // Drives the "not for compliance use" banner.
     ctx.insert("missing_identification", &product.missing_identification());
@@ -181,6 +183,28 @@ const STATUS_FAIL: &str = "Fail";
 const STATUS_REVIEW: &str = "Review";
 const STATUS_NA: &str = "N/A";
 
+/// Evidence sentence for findings matched by name only.
+fn unconfirmed_note(count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    format!(
+        " {count} finding(s) are unconfirmed: matched by name only, because NVD has not analysed which products and versions the CVE affects (awaiting analysis or deferred); each must be checked for applicability."
+    )
+}
+
+/// Evidence sentence for unconfirmed findings that are listed in CISA KEV.
+fn unconfirmed_kev_note(ids: &[&str]) -> String {
+    if ids.is_empty() {
+        return String::new();
+    }
+    format!(
+        " {} unconfirmed finding(s) are listed in the CISA KEV catalogue: {}. Confirm whether they apply before market placement; if they do, remediation is required.",
+        ids.len(),
+        truncate_str(&ids.join(", "), 300)
+    )
+}
+
 /// Evidence sentence for components whose empty result cannot be trusted.
 fn unverified_note(count: usize) -> String {
     if count == 0 {
@@ -208,12 +232,28 @@ fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<Ch
     // CISA KEV is the only evidence of actual exploitation available here.
     // Annex I, Part I, point (2)(a) is about *exploitable* vulnerabilities, and
     // CVSS severity is not a measure of exploitation.
+    // Only a finding confirmed to apply to this component can support a Fail:
+    // an unconfirmed name match may concern another product (e.g. one that
+    // bundles the component), and is left for review instead.
     let kev_ids: Vec<&str> = report
         .vulnerabilities
         .iter()
-        .filter(|v| v.in_kev)
+        .filter(|v| v.in_kev && !v.unconfirmed)
         .map(|v| v.cve_id.as_str())
         .collect();
+    let unconfirmed_kev: Vec<&str> = report
+        .vulnerabilities
+        .iter()
+        .filter(|v| v.in_kev && v.unconfirmed)
+        .map(|v| v.cve_id.as_str())
+        .collect();
+    let unconfirmed = report.stats.unconfirmed;
+    // Appended to every evidence variant, so the CVE ids are never lost.
+    let unconfirmed_detail = format!(
+        "{}{}",
+        unconfirmed_kev_note(&unconfirmed_kev),
+        unconfirmed_note(unconfirmed)
+    );
 
     let missing_licenses = report
         .components
@@ -237,33 +277,40 @@ fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<Ch
             },
             evidence: if !kev_ids.is_empty() {
                 format!(
-                    "{} vulnerabilit(y/ies) are listed in the CISA Known Exploited Vulnerabilities catalogue and are therefore known to be exploited: {}. Remediation required before market placement.{}",
+                    "{} vulnerabilit(y/ies) are listed in the CISA Known Exploited Vulnerabilities catalogue and are therefore known to be exploited: {}. Remediation required before market placement.{}{}",
                     kev_ids.len(),
                     truncate_str(&kev_ids.join(", "), 300),
                     if incomplete {
                         " The scan was incomplete, so further findings may be missing."
                     } else {
                         ""
-                    }
+                    },
+                    unconfirmed_detail
                 )
             } else if incomplete {
                 format!(
-                    "Scan incomplete: {} vulnerability lookup(s) failed or were not possible, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the lookups that did succeed; this is a lower bound and the CISA KEV check may be incomplete. Re-run the scan, or correct the SBOM entries listed in the report.",
-                    gap_count, report.stats.total_vulns
+                    "Scan incomplete: {} vulnerability lookup(s) failed or were not possible, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the lookups that did succeed; this is a lower bound and the CISA KEV check may be incomplete. Re-run the scan, or correct the SBOM entries listed in the report.{}",
+                    gap_count, report.stats.total_vulns, unconfirmed_detail
                 )
             } else if offline {
                 format!(
-                    "Offline scan: only the local database snapshot was consulted and the CISA KEV catalogue was not checked, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the snapshot. Run an online scan.",
-                    report.stats.total_vulns
+                    "Offline scan: only the local database snapshot was consulted and the CISA KEV catalogue was not checked, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the snapshot. Run an online scan.{}",
+                    report.stats.total_vulns, unconfirmed_detail
                 )
             } else if has_any_vuln {
                 format!(
-                    "{} known vulnerabilit(y/ies) remain ({} critical, {} high, {} medium, {} low). None are listed in the CISA KEV catalogue, but exploitability must be assessed by the manufacturer.{}",
+                    "{} known vulnerabilit(y/ies) remain ({} critical, {} high, {} medium, {} low). {}{}{}",
                     report.stats.total_vulns,
                     report.stats.critical,
                     report.stats.high,
                     report.stats.medium,
                     report.stats.low,
+                    if unconfirmed_kev.is_empty() {
+                        "None are listed in the CISA KEV catalogue, but exploitability must be assessed by the manufacturer."
+                    } else {
+                        "None confirmed to apply is listed in the CISA KEV catalogue; exploitability must be assessed by the manufacturer."
+                    },
+                    unconfirmed_detail,
                     unverified_note(unverified)
                 )
             } else if unverified > 0 {
@@ -346,7 +393,15 @@ fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<Ch
                 if offline {
                     "CISA KEV catalogue not checked".to_string()
                 } else {
-                    format!("{} in the CISA KEV catalogue", kev_ids.len())
+                    if unconfirmed_kev.is_empty() {
+                        format!("{} in the CISA KEV catalogue", kev_ids.len())
+                    } else {
+                        format!(
+                            "{} in the CISA KEV catalogue, {} of them unconfirmed",
+                            kev_ids.len() + unconfirmed_kev.len(),
+                            unconfirmed_kev.len()
+                        )
+                    }
                 },
                 missing_licenses,
                 if incomplete {
@@ -379,6 +434,7 @@ struct TemplateVuln {
     component_version: String,
     description_truncated: String,
     fixed_version: Option<String>,
+    unconfirmed: bool,
 }
 
 #[derive(Serialize)]
@@ -446,6 +502,7 @@ mod tests {
             description: "SM2 Decryption Buffer Overflow".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }];
 
         let license_issues = vec![LicenseIssue {
@@ -895,6 +952,7 @@ mod tests {
             description: "Test vulnerability".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }];
 
         let report = AnalysisReport::new(
@@ -1008,6 +1066,7 @@ mod tests {
             description: "Critical issue".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }];
 
         let report = AnalysisReport::new(
@@ -1051,6 +1110,7 @@ mod tests {
             source: VulnSource::Osv,
             in_kev: true,
             kev_due_date: None,
+            unconfirmed: false,
         };
 
         AnalysisReport::new(
@@ -1247,5 +1307,114 @@ mod tests {
         let checklist = build_checklist(&report, &ProductMetadata::default());
         assert_eq!(checklist[0].status, "Review");
         assert!(checklist[0].evidence.contains("may have been missed"));
+    }
+
+    fn with_unconfirmed(report: AnalysisReport) -> AnalysisReport {
+        let mut vulns = report.vulnerabilities.clone();
+        for v in &mut vulns {
+            v.unconfirmed = true;
+        }
+        AnalysisReport::new(
+            report.sbom_file.clone(),
+            report.format_detected,
+            report.components.clone(),
+            vulns,
+            vec![],
+        )
+    }
+
+    // An unconfirmed name match may be another product's CVE (e.g. one that
+    // bundles the component), so KEV membership alone must not produce a Fail.
+    #[test]
+    fn test_checklist_unconfirmed_kev_is_review_not_fail() {
+        let report = with_unconfirmed(kev_report());
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0].evidence.contains("CVE-2024-99999"));
+        assert!(checklist[0].evidence.contains("unconfirmed"));
+        assert_eq!(report.stats.unconfirmed, 1);
+    }
+
+    #[test]
+    fn test_cra_html_marks_unconfirmed_findings() {
+        let html =
+            render_cra(&with_unconfirmed(kev_report()), &ProductMetadata::default()).unwrap();
+        assert!(html.contains("class=\"unconfirmed\""));
+        assert!(html.contains("1 finding(s) are marked Unconfirmed"));
+
+        let html = render_cra(&kev_report(), &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("class=\"unconfirmed\""));
+        assert!(!html.contains("marked Unconfirmed"));
+    }
+
+    fn kev_finding(cve: &str, unconfirmed: bool) -> VulnMatch {
+        let mut v = kev_report().vulnerabilities[0].clone();
+        v.cve_id = cve.to_string();
+        v.unconfirmed = unconfirmed;
+        v
+    }
+
+    fn report_of(vulns: Vec<VulnMatch>) -> AnalysisReport {
+        let base = kev_report();
+        AnalysisReport::new(
+            base.sbom_file.clone(),
+            base.format_detected,
+            base.components.clone(),
+            vulns,
+            vec![],
+        )
+    }
+
+    // Confirmed KEV still fails; the unconfirmed one is named alongside it, and
+    // the Article 13(5) row counts both.
+    #[test]
+    fn test_checklist_mixed_kev_fails_and_names_both() {
+        let report = report_of(vec![
+            kev_finding("CVE-2024-00001", false),
+            kev_finding("CVE-2024-00002", true),
+        ]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Fail");
+        assert!(checklist[0].evidence.contains("CVE-2024-00001"));
+        assert!(checklist[0].evidence.contains("CVE-2024-00002"));
+        assert!(checklist[0]
+            .evidence
+            .contains("1 finding(s) are unconfirmed"));
+        let art_13_5 = checklist.last().unwrap();
+        assert!(art_13_5
+            .evidence
+            .contains("2 in the CISA KEV catalogue, 1 of them unconfirmed"));
+    }
+
+    // Regression: in an incomplete scan the unconfirmed KEV id was dropped.
+    #[test]
+    fn test_checklist_incomplete_scan_still_names_unconfirmed_kev() {
+        let report =
+            report_of(vec![kev_finding("CVE-2024-00002", true)]).with_scan_gaps(vec![gap("zlib")]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0].evidence.contains("Scan incomplete"));
+        assert!(checklist[0].evidence.contains("CVE-2024-00002"));
+        assert!(checklist[0].evidence.contains("unconfirmed"));
+    }
+
+    #[test]
+    fn test_checklist_unconfirmed_without_kev_is_review_with_count() {
+        let mut v = kev_finding("CVE-2024-00003", true);
+        v.in_kev = false;
+        let report = report_of(vec![v]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0]
+            .evidence
+            .contains("1 finding(s) are unconfirmed"));
+        assert!(!checklist[0].evidence.contains("CISA KEV catalogue:"));
+    }
+
+    #[test]
+    fn test_checklist_without_unconfirmed_does_not_mention_it() {
+        let checklist = build_checklist(&kev_report(), &ProductMetadata::default());
+        assert!(!checklist[0].evidence.contains("unconfirmed"));
+        assert!(!checklist.last().unwrap().evidence.contains("unconfirmed"));
     }
 }

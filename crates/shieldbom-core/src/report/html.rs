@@ -29,6 +29,7 @@ fn build_context(report: &AnalysisReport) -> Result<tera::Context> {
     ctx.insert("scan_gap_count", &report.scan_gaps.len());
     ctx.insert("offline", &report.offline);
     ctx.insert("unverified_count", &report.unverified.len());
+    ctx.insert("unconfirmed_count", &report.stats.unconfirmed);
     ctx.insert("sbom_file", &report.sbom_file.display().to_string());
     ctx.insert("format_detected", &report.format_detected.to_string());
     ctx.insert(
@@ -72,6 +73,7 @@ fn build_context(report: &AnalysisReport) -> Result<tera::Context> {
                 component_name: v.component_name.clone(),
                 component_version: v.component_version.clone(),
                 description_truncated,
+                unconfirmed: v.unconfirmed,
             }
         })
         .collect();
@@ -102,6 +104,7 @@ struct TemplateComponent {
 
 #[derive(Serialize)]
 struct TemplateVuln {
+    unconfirmed: bool,
     cve_id: String,
     severity: String,
     severity_class: String,
@@ -170,6 +173,7 @@ mod tests {
             description: "SM2 Decryption Buffer Overflow".to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }];
 
         let license_issues = vec![LicenseIssue {
@@ -277,6 +281,7 @@ mod tests {
             description: long_desc.clone(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }];
 
         let report = AnalysisReport::new(
@@ -320,6 +325,7 @@ mod tests {
                 description: "test".to_string(),
                 in_kev: false,
                 kev_due_date: None,
+                unconfirmed: false,
             }];
 
             let report = AnalysisReport::new(
@@ -395,5 +401,25 @@ mod tests {
         assert!(!html.contains("No vulnerabilities found."));
         let clean = render_html(&empty_report()).unwrap();
         assert!(clean.contains("No vulnerabilities found."));
+    }
+
+    #[test]
+    fn test_html_marks_unconfirmed_findings() {
+        let base = sample_report();
+        let mut vulns = base.vulnerabilities.clone();
+        vulns[0].unconfirmed = true;
+        let report = AnalysisReport::new(
+            base.sbom_file.clone(),
+            base.format_detected,
+            base.components.clone(),
+            vulns,
+            vec![],
+        );
+        let html = render_html(&report).unwrap();
+        assert!(html.contains("class=\"unconfirmed\""));
+        assert!(html.contains("1 finding(s) are marked Unconfirmed"));
+
+        let html = render_html(&sample_report()).unwrap();
+        assert!(!html.contains("marked Unconfirmed"));
     }
 }

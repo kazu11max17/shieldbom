@@ -70,6 +70,7 @@ Format: SPDX 2.3 (JSON)
 Components: 9
 
   15 Critical  43 High  44 Medium  7 Low
+  21 of the 114 findings are unconfirmed (matched by name only; NVD has not analysed the CVE); check whether they apply.
 
 Vulnerabilities
 --------------------------------------------------------------------------------
@@ -85,12 +86,12 @@ License Issues
              - may conflict with proprietary distribution
 ```
 
-Output abridged. The scan reported 114 findings in November 2026: the 109 counted above plus 5 with no severity score. Counts change as the databases are updated. Three of the nine components (`freertos`, `lwip`, `cjson`) have no CPE in this SBOM, so their 32 findings come from keyword search and have not been checked for accuracy.
+Output abridged. The scan reported 114 findings in November 2026: the 109 counted above plus 5 with no severity score. Counts change as the databases are updated. Three of the nine components (`freertos`, `lwip`, `cjson`) have no CPE in this SBOM, so their 32 findings come from keyword search. For 21 of them NVD has not analysed which products and versions are affected (awaiting analysis or deferred), so they are marked unconfirmed. When we checked these 21 by hand in November 2026, 6 applied, 12 were about other products (for example software that bundles its own copy of cJSON or lwIP) or other versions, and 3 could not be decided from the description.
 
 Where each component is looked up:
 
 - **PURL that [OSV.dev](https://osv.dev/) has data for** -- OSV.dev. This covers language ecosystems (`pkg:cargo`, `pkg:npm`, `pkg:pypi`, `pkg:maven`, `pkg:golang`, `pkg:nuget`, `pkg:gem`, `pkg:composer`, `pkg:hex`, `pkg:pub`, `pkg:cran`, `pkg:swift`, `pkg:hackage`, `pkg:bitnami`) and the distributions `pkg:deb/debian`, `pkg:deb/ubuntu`, `pkg:rpm/redhat`, `pkg:rpm/rocky-linux`, `pkg:rpm/suse`. OSV.dev indexes Debian and Ubuntu by *source* package (`openssl`, `zlib`), not by binary package (`libssl3`, `zlib1g`). When a `pkg:deb` PURL has an `upstream` qualifier (as Syft emits), OSV.dev is asked for that source package. Without one the source package is unknown, so the component is also looked up in NVD; findings for binary packages may still be missed. When such a component has no findings, it is reported as unverified and the CRA report does not issue `PASS` for the vulnerability item (the exit code is not affected). SBOMs from tools that omit the qualifier can list many such components. The `distro` qualifier is not sent to OSV.dev, so results cover every release of the distribution and some may already be fixed in the release you ship.
-- **Everything else** -- [NVD](https://nvd.nist.gov/), by CPE when the SBOM has one, otherwise by keyword. This includes `pkg:deb` PURLs without an `upstream` qualifier (in addition to OSV.dev), components with no PURL, `pkg:generic` (common in embedded SBOMs), `pkg:github`, `pkg:conan`, `pkg:apk`, and other distributions such as OpenWrt, Raspbian, CentOS or Fedora. Keyword matches are imprecise: they can include false positives and can miss vulnerabilities. Add CPEs to your SBOM for better results.
+- **Everything else** -- [NVD](https://nvd.nist.gov/), by CPE when the SBOM has one, otherwise by keyword. This includes `pkg:deb` PURLs without an `upstream` qualifier (in addition to OSV.dev), components with no PURL, `pkg:generic` (common in embedded SBOMs), `pkg:github`, `pkg:conan`, `pkg:apk`, and other distributions such as OpenWrt, Raspbian, CentOS or Fedora. Keyword matches are imprecise: they can include false positives and can miss vulnerabilities. A keyword match is marked unconfirmed when NVD has no product/version data for the CVE (common for recent CVEs that are awaiting analysis or deferred); such findings still count toward the exit code. Add CPEs to your SBOM for better results.
 - `--nvd` queries NVD for every component in addition to OSV.
 
 NVD is rate-limited: about 6.5 seconds per component without an API key. Set `SHIELDBOM_NVD_API_KEY` ([request a key](https://nvd.nist.gov/developers/request-an-api-key)) to make it roughly ten times faster.

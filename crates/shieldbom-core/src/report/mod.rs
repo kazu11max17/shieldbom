@@ -166,6 +166,17 @@ pub(crate) fn incomplete_banner_lines(report: &AnalysisReport) -> Vec<String> {
     lines
 }
 
+/// Shown next to a finding whose applicability could not be confirmed.
+pub(crate) const UNCONFIRMED_LABEL: &str =
+    "Unconfirmed: matched by name only; NVD has not analysed which products and versions this CVE affects. Check whether it applies.";
+
+/// One-line note under the severity counts.
+pub(crate) fn unconfirmed_summary(count: usize, total: usize) -> String {
+    format!(
+        "{count} of the {total} findings are unconfirmed (matched by name only; NVD has not analysed the CVE); check whether they apply."
+    )
+}
+
 /// Comma-separated, terminal-safe list of names, capped at ten.
 pub fn summarize_names(names: &[String]) -> String {
     const SHOWN: usize = 10;
@@ -240,6 +251,12 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
         format_severity_count(report.stats.medium, Severity::Medium),
         format_severity_count(report.stats.low, Severity::Low),
     );
+    if report.stats.unconfirmed > 0 {
+        println!(
+            "  {}",
+            unconfirmed_summary(report.stats.unconfirmed, report.stats.total_vulns)
+        );
+    }
     println!();
 
     let banner = incomplete_banner_lines(report);
@@ -286,6 +303,9 @@ fn render_table(report: &AnalysisReport) -> Result<()> {
                 // Truncate long descriptions, strip ANSI from untrusted input
                 let desc = truncate_str(&strip_ansi(&vuln.description), 100);
                 println!("    {}", desc.dimmed());
+            }
+            if vuln.unconfirmed {
+                println!("    {}", UNCONFIRMED_LABEL.yellow());
             }
             if vuln.in_kev {
                 let kev_label = if let Some(due) = vuln.kev_due_date {

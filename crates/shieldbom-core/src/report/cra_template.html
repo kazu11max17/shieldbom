@@ -135,6 +135,8 @@
   .severity-medium { background: var(--color-medium); color: #212121; }
   .severity-low { background: var(--color-low); }
   .severity-unknown { background: #9e9e9e; }
+  .unconfirmed { display: inline-block; margin-top: 4px; padding: 1px 6px; border: 1px solid #b26a00; border-radius: 3px; color: #b26a00; font-size: 0.75em; }
+  .unconfirmed-note { margin: 0 0 12px; color: #b26a00; }
   .severity-none { background: #bdbdbd; color: #212121; }
   .status-pass {
     display: inline-block;
@@ -331,7 +333,8 @@
   <section>
     <h2><span class="section-num">2</span> Vulnerability Disclosure</h2>
     {% if vulnerabilities | length > 0 %}
-    <table>
+    {% if unconfirmed_count > 0 %}<p class="unconfirmed-note">{{ unconfirmed_count }} finding(s) are marked Unconfirmed: they were matched by name only because NVD has not analysed which products and versions the CVE affects (awaiting analysis or deferred). Some may concern other products that bundle or fork the component. Check whether each applies.</p>
+    {% endif %}<table>
       <thead>
         <tr>
           <th>CVE ID</th>
@@ -345,7 +348,7 @@
       <tbody>
         {% for vuln in vulnerabilities %}
         <tr>
-          <td><strong>{{ vuln.cve_id }}</strong></td>
+          <td><strong>{{ vuln.cve_id }}</strong>{% if vuln.unconfirmed %}<br><span class="unconfirmed" title="Matched by name only: NVD has not analysed which products and versions this CVE affects.">Unconfirmed</span>{% endif %}</td>
           <td><span class="severity-badge severity-{{ vuln.severity_class }}">{{ vuln.severity }}</span></td>
           <td>{% if vuln.cvss_score %}{{ vuln.cvss_score }}{% else %}-{% endif %}</td>
           <td>{{ vuln.component_name }} @ {{ vuln.component_version }}</td>

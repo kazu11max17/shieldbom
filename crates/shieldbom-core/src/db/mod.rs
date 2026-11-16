@@ -858,6 +858,7 @@ fn vuln_row_to_match(vr: &VulnRow, component: &Component) -> VulnMatch {
         description: vr.summary.clone(),
         in_kev: false,
         kev_due_date: None,
+        unconfirmed: false,
     }
 }
 

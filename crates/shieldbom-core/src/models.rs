@@ -96,6 +96,12 @@ pub struct VulnMatch {
     pub in_kev: bool,
     /// CISA KEV remediation due date (if applicable).
     pub kev_due_date: Option<chrono::NaiveDate>,
+    /// The match rests on a name search alone: NVD holds no product or version
+    /// data for this CVE (awaiting analysis or deferred), so it was not
+    /// possible to confirm that this component and version are affected.
+    /// Kept as a finding so nothing is hidden, but shown as needing review.
+    #[serde(default)]
+    pub unconfirmed: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -309,6 +315,10 @@ pub struct AnalysisStats {
     pub high: usize,
     pub medium: usize,
     pub low: usize,
+    /// Findings among `total_vulns` whose applicability could not be confirmed
+    /// (see [`VulnMatch::unconfirmed`]).
+    #[serde(default)]
+    pub unconfirmed: usize,
     pub license_issues: usize,
 }
 
@@ -337,6 +347,7 @@ impl AnalysisStats {
                 .filter(|v| v.severity == Severity::Medium)
                 .count(),
             low: vulns.iter().filter(|v| v.severity == Severity::Low).count(),
+            unconfirmed: vulns.iter().filter(|v| v.unconfirmed).count(),
             license_issues: license_issues.len(),
         }
     }
@@ -387,6 +398,7 @@ mod tests {
             description: String::new(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }
     }
 
@@ -448,5 +460,37 @@ mod tests {
         let report: AnalysisReport = serde_json::from_value(json).unwrap();
         assert!(report.is_complete());
         assert!(!report.offline);
+    }
+
+    #[test]
+    fn test_stats_count_unconfirmed_findings() {
+        let mut unconfirmed = finding(Severity::Unknown);
+        unconfirmed.cve_id = "CVE-2024-0002".to_string();
+        unconfirmed.unconfirmed = true;
+        let report = AnalysisReport::new(
+            PathBuf::from("x.json"),
+            SourceFormat::Unknown,
+            vec![],
+            vec![finding(Severity::High), unconfirmed],
+            vec![],
+        );
+        assert_eq!(report.stats.total_vulns, 2);
+        assert_eq!(report.stats.unconfirmed, 1);
+        // Still a finding for the exit code (fail-closed).
+        assert_eq!(report.exit_code(&Severity::Low), 1);
+    }
+
+    // JSON written by 0.3.1 and earlier has neither field.
+    #[test]
+    fn test_old_json_without_unconfirmed_still_parses() {
+        let mut json = serde_json::to_value(report_with_finding()).unwrap();
+        json["vulnerabilities"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("unconfirmed");
+        json["stats"].as_object_mut().unwrap().remove("unconfirmed");
+        let report: AnalysisReport = serde_json::from_value(json).unwrap();
+        assert!(!report.vulnerabilities[0].unconfirmed);
+        assert_eq!(report.stats.unconfirmed, 0);
     }
 }

@@ -324,6 +324,9 @@ fn merge_vuln_match(existing: &mut VulnMatch, incoming: &VulnMatch) {
         existing.affected_versions.ranges = incoming.affected_versions.ranges.clone();
     }
 
+    // Confirmed by either source is confirmed.
+    existing.unconfirmed = existing.unconfirmed && incoming.unconfirmed;
+
     // Mark source as merged (prefer showing original primary source)
     // Keep whichever source was first (usually OSV since we query it first)
 }
@@ -357,6 +360,7 @@ mod tests {
             description: desc.to_string(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         }
     }
 
@@ -494,6 +498,7 @@ mod tests {
             description: String::new(),
             in_kev: false,
             kev_due_date: None,
+            unconfirmed: false,
         };
         assert_eq!(
             unverified_components(&comps, &[found], &gaps),
@@ -680,5 +685,19 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].fixed_version, Some("3.1.0".to_string()));
         assert_eq!(result[0].cvss_score, Some(8.0));
+    }
+
+    #[test]
+    fn test_dedup_confirmed_source_wins_over_unconfirmed() {
+        let mut nvd = make_vuln("lwip", "CVE-2026-0001", VulnSource::Nvd, None, None, "");
+        nvd.unconfirmed = true;
+        let osv = make_vuln("lwip", "CVE-2026-0001", VulnSource::Osv, None, None, "");
+        let result = deduplicate_vulns(vec![nvd.clone(), osv]);
+        assert_eq!(result.len(), 1);
+        assert!(!result[0].unconfirmed);
+
+        let nvd2 = nvd.clone();
+        let result = deduplicate_vulns(vec![nvd, nvd2]);
+        assert!(result[0].unconfirmed);
     }
 }

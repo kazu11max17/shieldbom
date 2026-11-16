@@ -95,6 +95,7 @@ mod tests {
                 high,
                 medium,
                 low,
+                unconfirmed: 0,
                 license_issues: 0,
             },
         }
@@ -128,6 +129,7 @@ mod tests {
                 description: String::new(),
                 in_kev: false,
                 kev_due_date: None,
+                unconfirmed: false,
             })
             .collect();
         let svg = generate_badge_svg(&report);

@@ -322,8 +322,14 @@ async fn fetch_and_convert(
 
         for wrapper in &nvd_resp.vulnerabilities {
             // Apply version range filtering if configuration data is available
-            if is_component_affected(&wrapper.cve, component) {
-                results.push(convert_nvd_cve(&wrapper.cve, component));
+            match affects_component(&wrapper.cve, component) {
+                Applicability::Confirmed => {
+                    results.push(convert_nvd_cve(&wrapper.cve, component, false))
+                }
+                Applicability::Unconfirmed => {
+                    results.push(convert_nvd_cve(&wrapper.cve, component, true))
+                }
+                Applicability::NotAffected => {}
             }
         }
 
@@ -343,19 +349,34 @@ async fn fetch_and_convert(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Applicability {
+    /// NVD's CPE configuration names this product and a range containing the
+    /// component's version (or, as in 0.3.1, the component version cannot be
+    /// compared and the match is accepted).
+    Confirmed,
+    /// Could not be checked: NVD has no configuration for the CVE (common for
+    /// "Awaiting Analysis" / "Deferred" records, which a keyword search returns
+    /// whenever the name appears in the description). Reported, but flagged.
+    Unconfirmed,
+    NotAffected,
+}
+
 /// Check whether a component is actually affected by this CVE
 /// using NVD's CPE match configurations and version ranges.
-fn is_component_affected(cve: &NvdCve, component: &Component) -> bool {
-    // If there are no configurations, we can't filter - assume affected
+fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
+    // No configurations: nothing to check the match against. Keep it rather
+    // than drop it (no silent misses), but do not present it as confirmed.
     if cve.configurations.is_empty() {
-        return true;
+        return Applicability::Unconfirmed;
     }
 
     let component_version = match SemVer::parse(&component.version) {
         Some(v) => v,
         None => {
             // Cannot parse component version - fall back to accepting the match
-            return true;
+            // (unchanged from 0.3.1; see the v0.3.2 notes before narrowing it).
+            return Applicability::Confirmed;
         }
     };
 
@@ -387,23 +408,23 @@ fn is_component_affected(cve: &NvdCve, component: &Component) -> bool {
                             // CPE has a specific version - only match if component version matches
                             if let Some(cpe_ver) = SemVer::parse(cpe_ver_str) {
                                 if component_version == cpe_ver {
-                                    return true;
+                                    return Applicability::Confirmed;
                                 }
                             }
                             // If we can't parse the CPE version, fall through
                         } else {
                             // CPE version is wildcard (*) - matches all versions
-                            return true;
+                            return Applicability::Confirmed;
                         }
                     }
                 } else if range.contains(&component_version) {
-                    return true;
+                    return Applicability::Confirmed;
                 }
             }
         }
     }
 
-    false
+    Applicability::NotAffected
 }
 
 /// Check if a CPE match criteria string applies to a given component,
@@ -435,7 +456,7 @@ fn cpe_matches_component(cpe_criteria: &str, component: &Component) -> bool {
     product_match || vendor_match
 }
 
-fn convert_nvd_cve(cve: &NvdCve, component: &Component) -> VulnMatch {
+fn convert_nvd_cve(cve: &NvdCve, component: &Component, unconfirmed: bool) -> VulnMatch {
     let (severity, cvss_score) = extract_severity(cve);
     let description = extract_description(cve);
     let (affected_versions, fixed_version) = extract_version_info(cve, component);
@@ -455,6 +476,7 @@ fn convert_nvd_cve(cve: &NvdCve, component: &Component) -> VulnMatch {
         description,
         in_kev: false,
         kev_due_date: None,
+        unconfirmed,
     }
 }
 
@@ -677,7 +699,7 @@ mod tests {
     }
 
     #[test]
-    fn test_is_component_affected_version_range() {
+    fn test_affects_component_version_range() {
         let comp = make_component(
             "openssl",
             "1.1.1k",
@@ -704,12 +726,14 @@ mod tests {
             }],
         };
 
-        // Can't parse "1.1.1k" as semver, so it falls back to true
-        assert!(is_component_affected(&cve, &comp));
+        // Can't parse "1.1.1k" as semver: accepted as in 0.3.1. Not marked
+        // unconfirmed: NVD does have product data, and a KEV entry here must
+        // still produce a Fail (e.g. Heartbleed on 1.0.1f).
+        assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
     }
 
     #[test]
-    fn test_is_component_affected_semver_range() {
+    fn test_affects_component_semver_range() {
         let comp = make_component("mylib", "1.3.0", None);
 
         let cve = NvdCve {
@@ -730,11 +754,11 @@ mod tests {
             }],
         };
 
-        assert!(is_component_affected(&cve, &comp));
+        assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
     }
 
     #[test]
-    fn test_is_component_not_affected_outside_range() {
+    fn test_affects_component_outside_range() {
         let comp = make_component("mylib", "2.0.0", None);
 
         let cve = NvdCve {
@@ -755,11 +779,11 @@ mod tests {
             }],
         };
 
-        assert!(!is_component_affected(&cve, &comp));
+        assert_eq!(affects_component(&cve, &comp), Applicability::NotAffected);
     }
 
     #[test]
-    fn test_is_component_affected_no_configurations() {
+    fn test_affects_component_no_configurations() {
         let comp = make_component("mylib", "1.0.0", None);
 
         let cve = NvdCve {
@@ -769,8 +793,12 @@ mod tests {
             configurations: vec![],
         };
 
-        // No configurations = assume affected (conservative)
-        assert!(is_component_affected(&cve, &comp));
+        // No configurations (NVD has not analysed it): kept, but flagged.
+        // Regression (v0.3.1): these were reported as plain findings, e.g.
+        // rethinkdb's bundled cJSON or U-Boot's lwIP wget against cjson/lwip.
+        assert_eq!(affects_component(&cve, &comp), Applicability::Unconfirmed);
+        assert!(convert_nvd_cve(&cve, &comp, true).unconfirmed);
+        assert!(!convert_nvd_cve(&cve, &comp, false).unconfirmed);
     }
 
     #[test]

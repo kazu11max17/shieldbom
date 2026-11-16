@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **NVD findings that could not be checked against product and version data are now
+  marked unconfirmed.** A keyword search (components without a CPE) returns any CVE whose
+  description mentions the name. When NVD has not analysed a CVE (awaiting analysis or
+  deferred), it has no product or version data, and such CVEs were reported as plain
+  findings. In the bundled sample in November 2026, 12 of 21 such findings concerned other
+  products (for example software that bundles its own copy of cJSON or lwIP) or other
+  versions. They are still reported and still count toward the exit code, but are now
+  labelled in the table, HTML and CRA reports, SARIF (`"may affect"`,
+  `properties.unconfirmed`) and JSON (`unconfirmed`, `stats.unconfirmed`).
+- The CRA report no longer issues `FAIL` for "Delivered without known exploitable
+  vulnerabilities" on the basis of an unconfirmed finding listed in the CISA KEV
+  catalogue. It issues `REVIEW` and names the CVE. Other findings listed in the CISA KEV
+  catalogue still produce `FAIL`.
+
 ## [0.3.1] - 2026-11-16
 
 Everyone on 0.3.0 or earlier should upgrade. Those versions can report
