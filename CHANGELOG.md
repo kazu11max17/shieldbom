@@ -5,6 +5,87 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-16
+
+Everyone on 0.3.0 or earlier should upgrade. Those versions can report
+"0 vulnerabilities" for components that have known vulnerabilities, and the CRA report
+could issue `PASS` for "Delivered without known exploitable vulnerabilities" on that
+basis. Re-run any scan and regenerate any CRA report produced with those versions.
+
+### Fixed
+- **OSV.dev lookups always failed for PURLs that carry a version.** The request sent
+  the version both inside the PURL and as a separate field, which OSV.dev rejects with
+  HTTP 400. The error was swallowed, so such components always showed 0 vulnerabilities.
+  The version is now sent once.
+- **Failed lookups are no longer reported as "no vulnerabilities" in online scans.**
+  Network errors, rate limits (HTTP 429), HTTP 403 and other API errors from OSV.dev
+  and NVD were only logged at a level hidden by default. With the network down, a scan
+  printed "Found 0 vulnerabilities" and the CRA report issued `PASS` for "Delivered
+  without known exploitable vulnerabilities". Failed and impossible lookups are now
+  recorded: the scan is marked `SCAN INCOMPLETE` on stderr and in the table, JSON
+  (`scan_gaps`), SARIF (`invocations[].executionSuccessful`, plus `scanComplete` and
+  `scanGaps` properties), HTML and CRA outputs; the CRA item becomes `REVIEW`; the
+  badge shows "scan incomplete"; and the exit code is 2.
+- **Components OSV.dev has no data for were never matched by default.** `pkg:generic`
+  components were sent only to OSV.dev, so the bundled firmware example showed
+  0 vulnerabilities unless `--nvd` was passed. PURLs are now sent to OSV.dev only for
+  ecosystems and distributions confirmed to be answered; everything else goes to NVD by
+  default, including `pkg:generic`, `pkg:github`, `pkg:conan`, `pkg:apk` and
+  distributions such as OpenWrt, Raspbian, CentOS and Fedora. The `distro` qualifier is
+  no longer sent to OSV.dev, which returned nothing for spellings such as
+  `distro=debian-12`. Results now cover all releases of the distribution, so some
+  findings may already be fixed in the release you ship.
+- **Debian and Ubuntu binary packages were never matched.** OSV.dev indexes these
+  distributions by source package, so `libssl3`, `zlib1g`, `libc6` and similar returned
+  0 vulnerabilities. A `pkg:deb` PURL with an `upstream` qualifier is now looked up by
+  that source package; one without is also looked up in NVD, and if it still has no
+  findings it is reported as unverified and the CRA report does not issue `PASS`.
+- **Large result sets were silently cut off.** OSV.dev and NVD results are now read
+  page by page. A result set too large to read completely marks the scan incomplete.
+- **CISA KEV data was never applied.** The catalogue field `cveID` was read as `cveId`,
+  so the catalogue failed to parse and no finding was ever flagged as known-exploited
+  (and the CRA report never issued `FAIL` on that basis). The client now also sends a
+  `User-Agent`, and keeps entries whose due date cannot be read. A KEV fetch failure
+  with findings present marks the scan incomplete.
+- **Offline scans could issue a CRA `PASS` and state that no finding is in the CISA KEV
+  catalogue**, although `--offline` never consults it. The item is now always `REVIEW`
+  for offline scans and the evidence says what was and was not checked. Offline HTML
+  and CRA reports and the badge no longer show a clean result.
+- HTML and CRA reports no longer show "No vulnerabilities found" for an incomplete scan.
+- The badge showed a green "0 vulns" when all findings were medium, low or unscored.
+  It now shows the number of findings in yellow.
+- An unusable `SHIELDBOM_NVD_API_KEY` is reported instead of silently ignored.
+- The CRA report footer printed "DISCLAIMER: DISCLAIMER:".
+
+### Security
+- **NVD query values were not URL-encoded.** Characters such as `+`, `#` and `&` in a
+  component name or CPE changed the request (for example `libstdc++`), and a crafted
+  SBOM could narrow the query to hide findings.
+- Control characters in SBOM strings can no longer forge or overwrite lines in the
+  list of failed lookups.
+
+### Changed
+- Exit code 2 now also means "scan incomplete" and takes precedence over 1.
+- Scans of SBOMs with PURLs that OSV.dev does not cover are slower by default because
+  they now query NVD (about 6.5 s per component without `SHIELDBOM_NVD_API_KEY`).
+- Transient NVD failures (timeouts, HTTP 429, server errors) are retried up to twice,
+  so a scan without network access takes longer to fail than before. After three
+  consecutive failures to connect or to get a response in time, a data source is given
+  up on and its remaining components are reported as not queried. A data source that is
+  only very slow can therefore be given up on as well.
+- `shieldbom-core`: `vuln::match_vulnerabilities` now returns `MatchOutcome`, and
+  `AnalysisReport` has new public fields `scan_gaps` and `offline`.
+- README example output replaced with real output.
+
+### Known limitations
+- `--offline` scans do not track lookup completeness and do not consult the CISA KEV
+  catalogue. A clean offline result means nothing was found in the local snapshot.
+  The snapshot generally has no data for `pkg:generic` components.
+- NVD keyword search (used for components without a CPE) can return false positives
+  and can miss vulnerabilities.
+- `pkg:deb` PURLs without an `upstream` qualifier name a binary package, which OSV.dev
+  does not index; NVD is queried as well, but vulnerabilities can still be missed.
+
 ## [0.3.0] - 2026-08-03
 
 ### Fixed

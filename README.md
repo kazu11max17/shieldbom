@@ -20,7 +20,7 @@ ShieldBOM parses SBOM files (SPDX, CycloneDX), matches components against known 
 - **Vulnerability matching** -- CPE-based lookup against NVD/OSV data with CVSS severity scoring
 - **License conflict detection** -- Flags known-incompatible combinations (e.g., GPL-3.0 + proprietary)
 - **Multiple output formats** -- Human-readable table, JSON, and SARIF 2.1.0
-- **Offline-first** -- Download a vulnerability DB snapshot once, scan without network access
+- **Offline-first** -- Download a vulnerability DB snapshot once, scan without network access (covers less than an online scan; see Quick Start)
 - **Single binary** -- No runtime dependencies; works on Linux, macOS, and Windows
 - **Non-zero exit codes** -- Fails the build when policy violations are found (severity threshold configurable)
 
@@ -69,7 +69,15 @@ File: examples/smart-gateway-firmware.spdx.json
 Format: SPDX 2.3 (JSON)
 Components: 9
 
-  0 Critical  0 High  0 Medium  0 Low
+  15 Critical  43 High  44 Medium  7 Low
+
+Vulnerabilities
+--------------------------------------------------------------------------------
+  [LOW] CVE-2025-46394 busybox @ 1.36.0
+    In tar in BusyBox through 1.37.0, a TAR archive can have filenames hidden from a listing through the...
+  [MEDIUM] CVE-2025-60876 busybox @ 1.36.0
+    BusyBox wget thru 1.3.7 accepted raw CR (0x0D)/LF (0x0A) and other C0 control bytes in the HTTP requ...
+  ...
 
 License Issues
 --------------------------------------------------------------------------------
@@ -77,7 +85,21 @@ License Issues
              - may conflict with proprietary distribution
 ```
 
-By default, ShieldBOM queries [OSV.dev](https://osv.dev/) for vulnerabilities. For offline/air-gapped environments:
+Output abridged. The scan reported 114 findings in November 2026: the 109 counted above plus 5 with no severity score. Counts change as the databases are updated. Three of the nine components (`freertos`, `lwip`, `cjson`) have no CPE in this SBOM, so their 32 findings come from keyword search and have not been checked for accuracy.
+
+Where each component is looked up:
+
+- **PURL that [OSV.dev](https://osv.dev/) has data for** -- OSV.dev. This covers language ecosystems (`pkg:cargo`, `pkg:npm`, `pkg:pypi`, `pkg:maven`, `pkg:golang`, `pkg:nuget`, `pkg:gem`, `pkg:composer`, `pkg:hex`, `pkg:pub`, `pkg:cran`, `pkg:swift`, `pkg:hackage`, `pkg:bitnami`) and the distributions `pkg:deb/debian`, `pkg:deb/ubuntu`, `pkg:rpm/redhat`, `pkg:rpm/rocky-linux`, `pkg:rpm/suse`. OSV.dev indexes Debian and Ubuntu by *source* package (`openssl`, `zlib`), not by binary package (`libssl3`, `zlib1g`). When a `pkg:deb` PURL has an `upstream` qualifier (as Syft emits), OSV.dev is asked for that source package. Without one the source package is unknown, so the component is also looked up in NVD; findings for binary packages may still be missed. When such a component has no findings, it is reported as unverified and the CRA report does not issue `PASS` for the vulnerability item (the exit code is not affected). SBOMs from tools that omit the qualifier can list many such components. The `distro` qualifier is not sent to OSV.dev, so results cover every release of the distribution and some may already be fixed in the release you ship.
+- **Everything else** -- [NVD](https://nvd.nist.gov/), by CPE when the SBOM has one, otherwise by keyword. This includes `pkg:deb` PURLs without an `upstream` qualifier (in addition to OSV.dev), components with no PURL, `pkg:generic` (common in embedded SBOMs), `pkg:github`, `pkg:conan`, `pkg:apk`, and other distributions such as OpenWrt, Raspbian, CentOS or Fedora. Keyword matches are imprecise: they can include false positives and can miss vulnerabilities. Add CPEs to your SBOM for better results.
+- `--nvd` queries NVD for every component in addition to OSV.
+
+NVD is rate-limited: about 6.5 seconds per component without an API key. Set `SHIELDBOM_NVD_API_KEY` ([request a key](https://nvd.nist.gov/developers/request-an-api-key)) to make it roughly ten times faster.
+
+**In online scans, a failed lookup is never reported as "no vulnerabilities".** If any lookup fails (network error, rate limit, API error, result set too large to read completely) or a component cannot be queried, the scan is marked `SCAN INCOMPLETE` in every output format, the affected components are listed (the first 50 in reports, the first 10 on stderr, with a count of the rest), the exit code is 2, and the CRA report does not issue `PASS` for the vulnerability item. In SARIF this is reported as `invocations[].executionSuccessful: false` with a notification for each listed failed lookup.
+
+This does not apply to `--offline`. An offline scan only knows what is in the local database snapshot, does not consult the CISA KEV catalogue, and does not mark components the snapshot has no data for (`pkg:generic` components are typically among them). Offline HTML and CRA reports and the badge say so instead of showing a clean result. Treat a clean offline result as "nothing found in the snapshot", not as a complete scan. The CRA report never issues `PASS` for the vulnerability item from an offline scan.
+
+For offline/air-gapped environments:
 
 ```bash
 shieldbom db update           # Download vulnerability DB (once)
@@ -127,7 +149,7 @@ shieldbom db info
 |------|---------|
 | 0 | No issues found above the severity threshold |
 | 1 | Vulnerabilities or license conflicts detected |
-| 2 | Input error (malformed SBOM, missing file) |
+| 2 | Input error (malformed SBOM, missing file), or scan incomplete (one or more vulnerability lookups failed) -- takes precedence over 1 |
 
 ## Output Formats
 
@@ -180,7 +202,7 @@ Statuses are deliberately conservative:
 
 Two consequences worth knowing:
 
-- **Severity is not exploitability.** Annex I, Part I, point (2)(a) concerns *known exploitable* vulnerabilities, so a `PASS` is only issued when no known vulnerabilities remain. Anything listed in the [CISA KEV catalogue](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) is a `FAIL`; other findings are `REVIEW`.
+- **Severity is not exploitability.** Annex I, Part I, point (2)(a) concerns *known exploitable* vulnerabilities, so in an online scan a `PASS` is only issued when no known vulnerabilities were found and every lookup succeeded. Anything listed in the [CISA KEV catalogue](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) is a `FAIL`; other findings, and any incomplete scan, are `REVIEW`. With `--offline` the KEV catalogue is not consulted and lookup completeness is not tracked, so this item is always `REVIEW`; do not rely on an offline CRA report for it.
 - **Running a scan is not a process.** "Vulnerability handling process in place" is always `N/A`. Annex I, Part II requires remediation without delay and regular testing, which no single scan demonstrates.
 
 ## Roadmap

@@ -146,6 +146,12 @@ fn build_context(report: &AnalysisReport, product: &ProductMetadata) -> Result<t
     // own copy, or a legal revision would leave the distributed HTML stale.
     ctx.insert("disclaimer", super::DISCLAIMER);
 
+    // Drives the "scan incomplete" banner.
+    ctx.insert("scan_gaps", &super::scan_gap_lines(report));
+    ctx.insert("scan_gap_count", &report.scan_gaps.len());
+    ctx.insert("offline", &report.offline);
+    ctx.insert("unverified_count", &report.unverified.len());
+
     // Drives the "not for compliance use" banner.
     ctx.insert("missing_identification", &product.missing_identification());
 
@@ -175,8 +181,28 @@ const STATUS_FAIL: &str = "Fail";
 const STATUS_REVIEW: &str = "Review";
 const STATUS_NA: &str = "N/A";
 
+/// Evidence sentence for components whose empty result cannot be trusted.
+fn unverified_note(count: usize) -> String {
+    if count == 0 {
+        return String::new();
+    }
+    format!(
+        " {count} Debian/Ubuntu component(s) without source package information had no findings; OSV.dev indexes these distributions by source package, so vulnerabilities may have been missed. Add the `upstream` qualifier to their PURLs (as Syft emits) so they can be looked up by source package."
+    )
+}
+
 fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<ChecklistItem> {
     let has_any_vuln = report.stats.total_vulns > 0;
+    // A lookup that failed says nothing about the component it was for, so an
+    // incomplete scan can support neither a Pass nor a "none in KEV" statement.
+    let incomplete = !report.is_complete();
+    let gap_count = report.scan_gaps.len();
+    // An offline scan consults only the local snapshot and never the KEV
+    // catalogue, so it is equally unable to support a Pass.
+    let offline = report.offline;
+    // Debian/Ubuntu binary packages that came back empty: "nothing found" is
+    // not trustworthy for them, so no Pass either.
+    let unverified = report.unverified.len();
     let sbom_documented = !report.components.is_empty();
 
     // CISA KEV is the only evidence of actual exploitation available here.
@@ -201,27 +227,49 @@ fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<Ch
             cra_reference: "Annex I, Part I, point (2)(a)".to_string(),
             status: if !kev_ids.is_empty() {
                 STATUS_FAIL.to_string()
-            } else if has_any_vuln {
+            } else if has_any_vuln || incomplete || offline || unverified > 0 {
                 // Severity is not exploitability, so no Pass can be claimed while
-                // any known vulnerability remains.
+                // any known vulnerability remains — nor while part of the scan
+                // did not run, nor from an offline snapshot.
                 STATUS_REVIEW.to_string()
             } else {
                 STATUS_PASS.to_string()
             },
             evidence: if !kev_ids.is_empty() {
                 format!(
-                    "{} vulnerabilit(y/ies) are listed in the CISA Known Exploited Vulnerabilities catalogue and are therefore known to be exploited: {}. Remediation required before market placement.",
+                    "{} vulnerabilit(y/ies) are listed in the CISA Known Exploited Vulnerabilities catalogue and are therefore known to be exploited: {}. Remediation required before market placement.{}",
                     kev_ids.len(),
-                    truncate_str(&kev_ids.join(", "), 300)
+                    truncate_str(&kev_ids.join(", "), 300),
+                    if incomplete {
+                        " The scan was incomplete, so further findings may be missing."
+                    } else {
+                        ""
+                    }
+                )
+            } else if incomplete {
+                format!(
+                    "Scan incomplete: {} vulnerability lookup(s) failed or were not possible, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the lookups that did succeed; this is a lower bound and the CISA KEV check may be incomplete. Re-run the scan, or correct the SBOM entries listed in the report.",
+                    gap_count, report.stats.total_vulns
+                )
+            } else if offline {
+                format!(
+                    "Offline scan: only the local database snapshot was consulted and the CISA KEV catalogue was not checked, so no conclusion can be drawn. {} known vulnerabilit(y/ies) were found in the snapshot. Run an online scan.",
+                    report.stats.total_vulns
                 )
             } else if has_any_vuln {
                 format!(
-                    "{} known vulnerabilit(y/ies) remain ({} critical, {} high, {} medium, {} low). None are listed in the CISA KEV catalogue, but exploitability must be assessed by the manufacturer.",
+                    "{} known vulnerabilit(y/ies) remain ({} critical, {} high, {} medium, {} low). None are listed in the CISA KEV catalogue, but exploitability must be assessed by the manufacturer.{}",
                     report.stats.total_vulns,
                     report.stats.critical,
                     report.stats.high,
                     report.stats.medium,
-                    report.stats.low
+                    report.stats.low,
+                    unverified_note(unverified)
+                )
+            } else if unverified > 0 {
+                format!(
+                    "No known vulnerabilities detected, but this cannot be relied on:{}",
+                    unverified_note(unverified)
                 )
             } else {
                 "No known vulnerabilities detected in the SBOM components against the consulted databases.".to_string()
@@ -292,11 +340,22 @@ fn build_checklist(report: &AnalysisReport, product: &ProductMetadata) -> Vec<Ch
             // row reports what was observed instead of judging compliance.
             status: STATUS_REVIEW.to_string(),
             evidence: format!(
-                "{} components analysed; {} known vulnerabilit(y/ies) attributable to them ({} in the CISA KEV catalogue). {} component(s) lack license information, which limits provenance review. Due diligence under Article 13(5) covers more than this tool observes.",
+                "{} components analysed; {} known vulnerabilit(y/ies) attributable to them ({}). {} component(s) lack license information, which limits provenance review. Due diligence under Article 13(5) covers more than this tool observes.{}",
                 report.stats.total_components,
                 report.stats.total_vulns,
-                kev_ids.len(),
-                missing_licenses
+                if offline {
+                    "CISA KEV catalogue not checked".to_string()
+                } else {
+                    format!("{} in the CISA KEV catalogue", kev_ids.len())
+                },
+                missing_licenses,
+                if incomplete {
+                    " The scan was incomplete: these counts are a lower bound."
+                } else if offline {
+                    " Offline scan: only the local database snapshot was consulted."
+                } else {
+                    ""
+                }
             ),
         },
     ]
@@ -1063,5 +1122,130 @@ mod tests {
                 .evidence
                 .contains("requires manufacturer attestation"));
         }
+    }
+
+    fn gap(name: &str) -> crate::models::ScanGap {
+        crate::models::ScanGap {
+            component_name: name.to_string(),
+            component_version: "1.0.0".to_string(),
+            source: "OSV".to_string(),
+            reason: "could not connect".to_string(),
+        }
+    }
+
+    // Regression (v0.3.0): with the network down every lookup failed silently,
+    // the report listed 0 vulnerabilities and item 1 rendered as Pass.
+    #[test]
+    fn test_incomplete_scan_never_passes_vulnerability_item() {
+        let report = clean_report().with_scan_gaps(vec![gap("openssl")]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0].evidence.contains("Scan incomplete"));
+    }
+
+    #[test]
+    fn test_complete_clean_scan_still_passes() {
+        let checklist = build_checklist(&clean_report(), &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Pass");
+    }
+
+    #[test]
+    fn test_incomplete_scan_with_vulns_does_not_claim_kev_clear() {
+        let report = sample_report().with_scan_gaps(vec![gap("zlib")]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_ne!(checklist[0].status, "Pass");
+        assert!(!checklist[0].evidence.contains("None are listed"));
+    }
+
+    #[test]
+    fn test_incomplete_scan_banner_rendered_and_escaped() {
+        let report = clean_report().with_scan_gaps(vec![gap("<script>x</script>")]);
+        let html = render_cra(&report, &ProductMetadata::default()).unwrap();
+        assert!(html.contains("SCAN INCOMPLETE"));
+        assert!(!html.contains("<script>x</script>"));
+    }
+
+    #[test]
+    fn test_complete_scan_has_no_incomplete_banner() {
+        let html = render_cra(&clean_report(), &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("SCAN INCOMPLETE"));
+    }
+
+    #[test]
+    fn test_disclaimer_label_not_duplicated() {
+        let html = render_cra(&clean_report(), &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("DISCLAIMER: DISCLAIMER:"));
+    }
+
+    #[test]
+    fn test_incomplete_scan_qualifies_due_diligence_item() {
+        let report = sample_report().with_scan_gaps(vec![gap("zlib")]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert!(checklist[5].evidence.contains("lower bound"));
+    }
+
+    // Same failure class as the online one: the snapshot has no data for many
+    // components and never includes KEV, so "nothing found" proves nothing.
+    #[test]
+    fn test_offline_scan_never_passes_vulnerability_item() {
+        let report = clean_report().with_offline(true);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0].evidence.contains("Offline scan"));
+    }
+
+    #[test]
+    fn test_offline_scan_does_not_claim_kev_clear() {
+        let report = sample_report().with_offline(true);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_ne!(checklist[0].status, "Pass");
+        assert!(!checklist[0].evidence.contains("None are listed"));
+        assert!(checklist[5]
+            .evidence
+            .contains("CISA KEV catalogue not checked"));
+        assert!(!checklist[5].evidence.contains("0 in the CISA KEV"));
+    }
+
+    #[test]
+    fn test_offline_scan_has_no_clean_empty_state() {
+        let report = clean_report().with_offline(true);
+        let html = render_cra(&report, &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("No known vulnerabilities found"));
+        assert!(html.contains("local database snapshot"));
+    }
+
+    // Regression: the banner sat next to "No known vulnerabilities found".
+    #[test]
+    fn test_incomplete_scan_has_no_clean_empty_state() {
+        let report = clean_report().with_scan_gaps(vec![gap("openssl")]);
+        let html = render_cra(&report, &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("No known vulnerabilities found"));
+        let clean = render_cra(&clean_report(), &ProductMetadata::default()).unwrap();
+        assert!(clean.contains("No known vulnerabilities found"));
+    }
+
+    #[test]
+    fn test_banner_count_is_exact_when_list_is_capped() {
+        let gaps: Vec<_> = (0..60).map(|i| gap(&format!("c{i}"))).collect();
+        let report = clean_report().with_scan_gaps(gaps);
+        let html = render_cra(&report, &ProductMetadata::default()).unwrap();
+        assert!(html.contains("60 vulnerability lookup(s)"));
+        assert!(html.contains("... and 10 more"));
+    }
+
+    #[test]
+    fn test_unverified_has_no_clean_empty_state() {
+        let report = clean_report().with_unverified(vec!["zlib1g@1".to_string()]);
+        let html = render_cra(&report, &ProductMetadata::default()).unwrap();
+        assert!(!html.contains("No known vulnerabilities found"));
+        assert!(html.contains("could not be verified"));
+    }
+
+    #[test]
+    fn test_unverified_components_prevent_pass() {
+        let report = clean_report().with_unverified(vec!["zlib1g@1:1.2.13".to_string()]);
+        let checklist = build_checklist(&report, &ProductMetadata::default());
+        assert_eq!(checklist[0].status, "Review");
+        assert!(checklist[0].evidence.contains("may have been missed"));
     }
 }

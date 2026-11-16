@@ -13,15 +13,27 @@ pub fn write_badge(report: &AnalysisReport, path: &Path) -> Result<()> {
 pub fn generate_badge_svg(report: &AnalysisReport) -> String {
     let stats = &report.stats;
 
-    let (color, message) = if stats.critical > 0 {
+    // An incomplete scan must never render as a green "0 vulns" badge.
+    let (color, message) = if !report.is_complete() {
+        ("#9f9f9f", "scan incomplete".to_string())
+    } else if stats.critical > 0 {
         ("#e05d44", format!("{} critical", stats.critical))
     } else if stats.high > 0 {
         ("#e0a020", format!("{} high", stats.high))
+    } else if !report.vulnerabilities.is_empty() {
+        // Medium, low and unscored findings are still findings: never "0 vulns".
+        ("#dfb317", format!("{} vulns", report.vulnerabilities.len()))
+    } else if report.offline {
+        // The local snapshot is not a full check, so no green badge from it.
+        ("#9f9f9f", "offline scan".to_string())
+    } else if !report.unverified.is_empty() {
+        ("#9f9f9f", "0 vulns (unverified)".to_string())
     } else {
         ("#44cc11", "0 vulns".to_string())
     };
 
-    let total_vulns = stats.critical + stats.high + stats.medium + stats.low;
+    // Counts every finding, including ones with no severity score.
+    let total_vulns = report.vulnerabilities.len();
     let timestamp = current_utc_timestamp();
     let version = env!("CARGO_PKG_VERSION");
     let desc = format!(
@@ -71,6 +83,9 @@ mod tests {
             vulnerabilities: vec![],
             license_issues: vec![],
             disclaimer: String::new(),
+            scan_gaps: Vec::new(),
+            offline: false,
+            unverified: Vec::new(),
             timestamp: chrono::Utc::now(),
             stats: AnalysisStats {
                 total_components: 0,
@@ -91,6 +106,74 @@ mod tests {
         let svg = generate_badge_svg(&report);
         assert!(svg.contains("#44cc11"), "should be green");
         assert!(svg.contains("0 vulns"), "should show '0 vulns'");
+    }
+
+    // Regression (existing since the badge was added): medium/low-only
+    // findings rendered as a green "0 vulns" badge.
+    #[test]
+    fn test_badge_medium_low_only_is_not_zero() {
+        use crate::models::{AffectedVersions, Severity, VulnMatch, VulnSource};
+        let mut report = make_report(0, 0, 1, 1);
+        report.vulnerabilities = [Severity::Medium, Severity::Low]
+            .into_iter()
+            .map(|severity| VulnMatch {
+                component_name: "zlib".to_string(),
+                component_version: "1.2.13".to_string(),
+                cve_id: "CVE-2024-0001".to_string(),
+                severity,
+                cvss_score: None,
+                source: VulnSource::Nvd,
+                affected_versions: AffectedVersions::default(),
+                fixed_version: None,
+                description: String::new(),
+                in_kev: false,
+                kev_due_date: None,
+            })
+            .collect();
+        let svg = generate_badge_svg(&report);
+        assert!(svg.contains("2 vulns"));
+        assert!(!svg.contains("0 vulns"));
+        assert!(!svg.contains("#44cc11"));
+    }
+
+    #[test]
+    fn test_badge_unverified_is_not_green() {
+        let mut report = make_report(0, 0, 0, 0);
+        report.unverified = vec!["zlib1g".to_string()];
+        let svg = generate_badge_svg(&report);
+        assert!(svg.contains("0 vulns (unverified)"));
+        assert!(!svg.contains("#44cc11"));
+    }
+
+    #[test]
+    fn test_badge_offline_scan_is_not_green() {
+        let mut report = make_report(0, 0, 0, 0);
+        report.offline = true;
+        let svg = generate_badge_svg(&report);
+        assert!(svg.contains("offline scan"));
+        assert!(!svg.contains("#44cc11"));
+        // Findings from the snapshot are still shown.
+        let mut report = make_report(2, 0, 0, 0);
+        report.offline = true;
+        assert!(generate_badge_svg(&report).contains("2 critical"));
+    }
+
+    // Regression guard: an incomplete scan must not look green or definite.
+    #[test]
+    fn test_badge_incomplete_scan() {
+        for mut report in [make_report(0, 0, 0, 0), make_report(3, 0, 0, 0)] {
+            report.scan_gaps = vec![crate::models::ScanGap {
+                component_name: "openssl".to_string(),
+                component_version: "3.0.8".to_string(),
+                source: "NVD".to_string(),
+                reason: "could not connect".to_string(),
+            }];
+            let svg = generate_badge_svg(&report);
+            assert!(svg.contains("scan incomplete"));
+            assert!(!svg.contains("#44cc11"), "must not be green");
+            assert!(!svg.contains("0 vulns"));
+            assert!(!svg.contains("3 critical"));
+        }
     }
 
     #[test]

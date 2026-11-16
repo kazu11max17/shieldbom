@@ -5,7 +5,7 @@ use anyhow::Result;
 use serde::Deserialize;
 
 use crate::models::{
-    AffectedVersions, Component, Severity, VersionRangeInfo, VulnMatch, VulnSource,
+    AffectedVersions, Component, ScanGap, Severity, VersionRangeInfo, VulnMatch, VulnSource,
 };
 use crate::version::{fuzzy_vendor_match, parse_cpe_parts, SemVer, VersionRange};
 
@@ -23,12 +23,17 @@ struct NvdResponse {
     #[allow(dead_code)]
     #[serde(default, rename = "resultsPerPage")]
     results_per_page: u32,
-    #[allow(dead_code)]
-    #[serde(default, rename = "totalResults")]
+    /// Required on purpose: a 200 response without it is not an NVD result
+    /// page and must not be read as "0 vulnerabilities".
+    #[serde(rename = "totalResults")]
     total_results: u32,
     #[serde(default)]
     vulnerabilities: Vec<NvdVulnWrapper>,
 }
+
+/// Upper bound on result pages fetched per component (2000 CVEs each).
+/// Beyond this the lookup is reported as truncated rather than complete.
+const MAX_PAGES: usize = 5;
 
 #[derive(Debug, Deserialize)]
 struct NvdVulnWrapper {
@@ -109,123 +114,233 @@ struct NvdCpeMatch {
     version_end_excluding: Option<String>,
 }
 
-/// Query NVD API 2.0 for vulnerabilities matching the given components.
+/// Query NVD for each component.
 ///
-/// Uses CPE match when a component has a `cpe` field, otherwise falls back
-/// to keyword search by package name.
-pub async fn query_batch(components: &[&Component]) -> Result<Vec<VulnMatch>> {
-    let api_key = env::var("SHIELDBOM_NVD_API_KEY").ok();
-    let delay = if api_key.is_some() {
+/// Every lookup that fails (network error, rate limit, auth, bad response) or
+/// cannot be attempted is returned as a [`ScanGap`] instead of being dropped.
+pub async fn query_batch(components: &[&Component]) -> Result<(Vec<VulnMatch>, Vec<ScanGap>)> {
+    // A key that cannot be sent as a header is treated as no key, loudly:
+    // sending nothing at the with-key rate would only produce HTTP 429s.
+    let mut headers = reqwest::header::HeaderMap::new();
+    let mut has_key = false;
+    if let Ok(key) = env::var("SHIELDBOM_NVD_API_KEY") {
+        match reqwest::header::HeaderValue::from_str(key.trim()) {
+            Ok(mut val) if !key.trim().is_empty() => {
+                val.set_sensitive(true);
+                headers.insert("apiKey", val);
+                has_key = true;
+            }
+            _ => eprintln!(
+                "Warning: SHIELDBOM_NVD_API_KEY is empty or contains invalid characters; \
+                 querying NVD without an API key."
+            ),
+        }
+    }
+    let delay = if has_key {
         DELAY_WITH_KEY
     } else {
         DELAY_WITHOUT_KEY
     };
 
-    let mut headers = reqwest::header::HeaderMap::new();
-    if let Some(ref key) = api_key {
-        if let Ok(val) = reqwest::header::HeaderValue::from_str(key) {
-            headers.insert("apiKey", val);
-        }
-    }
-
     let client = reqwest::Client::builder()
         .default_headers(headers)
-        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(60))
         .build()?;
 
     let mut results = Vec::new();
+    let mut gaps = Vec::new();
+    let mut requests_sent = 0usize;
+    let mut streak = super::UnreachableStreak::default();
 
-    for (i, component) in components.iter().enumerate() {
+    for component in components {
         if component.version.is_empty() {
+            gaps.push(ScanGap::new(
+                component,
+                "NVD",
+                "no version in SBOM; not queried",
+            ));
+            continue;
+        }
+
+        if streak.exhausted() {
+            gaps.push(ScanGap::new(
+                component,
+                "NVD",
+                "not queried: NVD unreachable or not responding",
+            ));
             continue;
         }
 
         // Rate-limit: wait between requests (skip delay before the first)
-        if i > 0 {
+        if requests_sent > 0 {
             tokio::time::sleep(delay).await;
         }
+        requests_sent += 1;
 
-        let vulns = if let Some(cpe) = &component.cpe {
-            query_by_cpe(&client, cpe, component).await
-        } else {
-            query_by_keyword(&client, &component.name, component).await
+        // Passed as a query parameter so reqwest percent-encodes it; SBOM
+        // strings such as "libstdc++" or "a&b" must not reshape the request.
+        let param = match &component.cpe {
+            Some(cpe) => ("cpeName", cpe.as_str()),
+            None => ("keywordSearch", component.name.as_str()),
         };
-
-        match vulns {
-            Ok(v) => results.extend(v),
-            Err(e) => {
-                tracing::warn!(
-                    "NVD API error for {}@{}: {e}",
-                    component.name,
-                    component.version
-                );
-            }
+        let (vulns, failure) = fetch_and_convert(&client, param, component, delay).await;
+        results.extend(vulns);
+        streak.record(failure.as_ref().map(|e| {
+            e.downcast_ref::<reqwest::Error>()
+                .is_some_and(super::is_unreachable)
+        }));
+        if let Some(e) = failure {
+            gaps.push(ScanGap::new(component, "NVD", describe_error(&e)));
         }
     }
 
-    Ok(results)
+    Ok((results, gaps))
 }
 
-async fn query_by_cpe(
+/// Error text for a gap. Request URLs are left out: they add noise and would
+/// echo SBOM-controlled strings back into reports.
+fn describe_error(e: &anyhow::Error) -> String {
+    match e.downcast_ref::<reqwest::Error>() {
+        Some(r) => super::describe_request_error(r).to_string(),
+        None => e.to_string(),
+    }
+}
+
+/// A non-success HTTP status from NVD.
+#[derive(Debug, PartialEq, Eq)]
+struct StatusError(u16);
+
+impl std::fmt::Display for StatusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            429 => write!(
+                f,
+                "rate limited (HTTP 429); set SHIELDBOM_NVD_API_KEY or retry later"
+            ),
+            403 => write!(f, "HTTP 403; check SHIELDBOM_NVD_API_KEY or retry later"),
+            code => write!(f, "HTTP {code}"),
+        }
+    }
+}
+
+impl std::error::Error for StatusError {}
+
+/// Maps an NVD HTTP status to an error. A failed lookup is an error, never an
+/// empty result: "no answer" must not be reported as "no vulnerabilities".
+fn check_status(status: reqwest::StatusCode) -> Result<()> {
+    if status.is_success() {
+        Ok(())
+    } else {
+        Err(StatusError(status.as_u16()).into())
+    }
+}
+
+/// Attempts per result page. NVD is frequently slow or briefly unavailable;
+/// without a retry, ordinary scans would often end up marked incomplete.
+const MAX_ATTEMPTS: usize = 3;
+
+/// True for failures worth retrying: transport errors, rate limiting and
+/// server-side errors. Client errors (bad key, bad request) are not.
+fn is_retryable(e: &anyhow::Error) -> bool {
+    match e.downcast_ref::<StatusError>() {
+        Some(StatusError(code)) => *code == 429 || *code >= 500,
+        None => e
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(|r| r.is_timeout() || !r.is_decode()),
+    }
+}
+
+/// Fetches one result page, without retrying.
+async fn fetch_page(
     client: &reqwest::Client,
-    cpe: &str,
-    component: &Component,
-) -> Result<Vec<VulnMatch>> {
-    let url = format!("{}?cpeName={}", NVD_API_URL, cpe);
-    fetch_and_convert(client, &url, component).await
+    param: (&str, &str),
+    start_index: usize,
+) -> Result<NvdResponse> {
+    let start = start_index.to_string();
+    let resp = client
+        .get(NVD_API_URL)
+        .query(&[param, ("startIndex", start.as_str())])
+        .send()
+        .await?;
+    check_status(resp.status())?;
+    Ok(resp.json().await?)
 }
 
-async fn query_by_keyword(
-    client: &reqwest::Client,
-    keyword: &str,
-    component: &Component,
-) -> Result<Vec<VulnMatch>> {
-    let url = format!("{}?keywordSearch={}", NVD_API_URL, keyword);
-    fetch_and_convert(client, &url, component).await
+/// What to do after receiving a result page.
+#[derive(Debug, PartialEq, Eq)]
+enum NextStep {
+    Done,
+    /// Fetch the next page starting at this index.
+    Fetch(usize),
 }
 
+/// Decides whether more pages are needed. Errors when the result set cannot be
+/// read to the end, so a partial list is never treated as complete.
+fn next_step(total: usize, fetched: usize, page_len: usize, pages_done: usize) -> Result<NextStep> {
+    if fetched >= total {
+        return Ok(NextStep::Done);
+    }
+    if page_len == 0 || pages_done >= MAX_PAGES {
+        anyhow::bail!(
+            "results truncated ({fetched} of {total} CVEs read); \
+             add a CPE to this SBOM entry to narrow the lookup"
+        );
+    }
+    Ok(NextStep::Fetch(fetched))
+}
+
+/// Reads every result page for one component. Findings read before a failure
+/// are still returned alongside the error: dropping them could hide a
+/// known-exploited CVE behind a mere "incomplete".
 async fn fetch_and_convert(
     client: &reqwest::Client,
-    url: &str,
+    param: (&str, &str),
     component: &Component,
-) -> Result<Vec<VulnMatch>> {
-    let resp = client.get(url).send().await?;
-
-    if resp.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
-        tracing::warn!(
-            "NVD rate limit hit for {}@{}, skipping",
-            component.name,
-            component.version
-        );
-        return Ok(Vec::new());
-    }
-
-    if resp.status() == reqwest::StatusCode::FORBIDDEN {
-        tracing::warn!("NVD API returned 403 - check your API key");
-        return Ok(Vec::new());
-    }
-
-    if !resp.status().is_success() {
-        tracing::warn!(
-            "NVD API returned {} for {}@{}",
-            resp.status(),
-            component.name,
-            component.version
-        );
-        return Ok(Vec::new());
-    }
-
-    let nvd_resp: NvdResponse = resp.json().await?;
+    delay: Duration,
+) -> (Vec<VulnMatch>, Option<anyhow::Error>) {
     let mut results = Vec::new();
+    let mut start_index = 0usize;
+    let mut fetched = 0usize;
+    let mut pages_done = 0usize;
 
-    for wrapper in &nvd_resp.vulnerabilities {
-        // Apply version range filtering if configuration data is available
-        if is_component_affected(&wrapper.cve, component) {
-            results.push(convert_nvd_cve(&wrapper.cve, component));
+    loop {
+        let mut attempt = 1;
+        let nvd_resp = loop {
+            match fetch_page(client, param, start_index).await {
+                Ok(page) => break page,
+                Err(e) if attempt < MAX_ATTEMPTS && is_retryable(&e) => {
+                    attempt += 1;
+                    tokio::time::sleep(delay).await;
+                }
+                // Still failing after the retries: the caller records a gap.
+                Err(e) => return (results, Some(e)),
+            }
+        };
+        pages_done += 1;
+        fetched += nvd_resp.vulnerabilities.len();
+
+        for wrapper in &nvd_resp.vulnerabilities {
+            // Apply version range filtering if configuration data is available
+            if is_component_affected(&wrapper.cve, component) {
+                results.push(convert_nvd_cve(&wrapper.cve, component));
+            }
+        }
+
+        match next_step(
+            nvd_resp.total_results as usize,
+            fetched,
+            nvd_resp.vulnerabilities.len(),
+            pages_done,
+        ) {
+            Ok(NextStep::Done) => return (results, None),
+            Ok(NextStep::Fetch(next)) => {
+                start_index = next;
+                tokio::time::sleep(delay).await;
+            }
+            Err(e) => return (results, Some(e)),
         }
     }
-
-    Ok(results)
 }
 
 /// Check whether a component is actually affected by this CVE
@@ -455,6 +570,64 @@ mod tests {
             hashes: vec![],
             source_format: SourceFormat::Unknown,
         }
+    }
+
+    // Regression (v0.3.0): 429/403/5xx were turned into empty results.
+    #[test]
+    fn test_check_status_errors_are_not_empty_results() {
+        use reqwest::StatusCode;
+        assert!(check_status(StatusCode::OK).is_ok());
+        for code in [429u16, 403, 404, 500, 503] {
+            let status = StatusCode::from_u16(code).unwrap();
+            assert!(
+                check_status(status).is_err(),
+                "HTTP {code} must be an error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_is_retryable() {
+        for code in [429u16, 500, 502, 503] {
+            assert!(is_retryable(&StatusError(code).into()), "HTTP {code}");
+        }
+        for code in [400u16, 403, 404] {
+            assert!(!is_retryable(&StatusError(code).into()), "HTTP {code}");
+        }
+        assert!(!is_retryable(&anyhow::anyhow!("results truncated")));
+    }
+
+    #[test]
+    fn test_status_error_messages_name_the_api_key() {
+        assert!(StatusError(429)
+            .to_string()
+            .contains("SHIELDBOM_NVD_API_KEY"));
+        assert!(StatusError(403).to_string().contains("HTTP 403"));
+        assert_eq!(StatusError(503).to_string(), "HTTP 503");
+    }
+
+    #[test]
+    fn test_next_step_paging() {
+        assert_eq!(next_step(0, 0, 0, 1).unwrap(), NextStep::Done);
+        assert_eq!(next_step(150, 150, 150, 1).unwrap(), NextStep::Done);
+        assert_eq!(
+            next_step(2500, 2000, 2000, 1).unwrap(),
+            NextStep::Fetch(2000)
+        );
+        // Page cap reached with results left: must not be treated as complete.
+        assert!(next_step(26535, 10000, 2000, MAX_PAGES).is_err());
+        // Server claims more results but sends none: must not loop or pass.
+        assert!(next_step(10, 0, 0, 1).is_err());
+    }
+
+    // A 200 response that is not an NVD result page must fail to parse.
+    #[test]
+    fn test_response_without_total_results_is_rejected() {
+        assert!(serde_json::from_str::<NvdResponse>("{}").is_err());
+        assert!(serde_json::from_str::<NvdResponse>(r#"{"message":"x"}"#).is_err());
+        let ok: NvdResponse =
+            serde_json::from_str(r#"{"totalResults":0,"vulnerabilities":[]}"#).unwrap();
+        assert_eq!(ok.total_results, 0);
     }
 
     #[test]

@@ -88,12 +88,34 @@ mod commands {
             std::process::exit(2);
         }
 
-        let vulns = if args.offline {
-            vuln::match_offline(&sbom.components).await?
+        let (vulns, scan_gaps, unverified) = if args.offline {
+            (
+                vuln::match_offline(&sbom.components).await?,
+                Vec::new(),
+                Vec::new(),
+            )
         } else {
-            vuln::match_vulnerabilities(&sbom.components, args.nvd).await?
+            let outcome = vuln::match_vulnerabilities(&sbom.components, args.nvd).await?;
+            (outcome.vulns, outcome.gaps, outcome.unverified)
         };
         eprintln!("Found {} vulnerabilities", vulns.len());
+        warn_scan_gaps(&scan_gaps);
+        if !unverified.is_empty() {
+            eprintln!(
+                "Note: {} Debian/Ubuntu component(s) have no source package information \
+                 (no usable `upstream` qualifier) and no findings. OSV.dev indexes these by source \
+                 package, so vulnerabilities may have been missed: {}",
+                unverified.len(),
+                shieldbom_core::report::summarize_names(&unverified)
+            );
+        }
+        if args.offline {
+            eprintln!(
+                "Note: offline scan. Only the local database snapshot was consulted and the \
+                 CISA KEV catalogue was not checked. Components the snapshot has no data for \
+                 are not flagged, so a clean result is not a complete scan."
+            );
+        }
 
         let license_issues = license::check(&sbom.components);
         eprintln!("Found {} license issues", license_issues.len());
@@ -104,7 +126,10 @@ mod commands {
             sbom.components,
             vulns,
             license_issues,
-        );
+        )
+        .with_scan_gaps(scan_gaps)
+        .with_offline(args.offline)
+        .with_unverified(unverified);
 
         let severity = args.severity_threshold();
         let product = args.product_metadata();
@@ -149,6 +174,26 @@ mod commands {
         }
 
         Ok(())
+    }
+
+    /// Failed lookups go to stderr unconditionally: a quiet "0 vulnerabilities"
+    /// after a failed query is the worst output this tool can produce.
+    fn warn_scan_gaps(gaps: &[shieldbom_core::models::ScanGap]) {
+        const SHOWN: usize = 10;
+        if gaps.is_empty() {
+            return;
+        }
+        eprintln!(
+            "Warning: SCAN INCOMPLETE - {} vulnerability lookup(s) failed or were not possible. \
+             The result is NOT evidence of absence of vulnerabilities (exit code 2).",
+            gaps.len()
+        );
+        for gap in gaps.iter().take(SHOWN) {
+            eprintln!("  - {}", shieldbom_core::report::format_scan_gap(gap));
+        }
+        if gaps.len() > SHOWN {
+            eprintln!("  ... and {} more", gaps.len() - SHOWN);
+        }
     }
 
     async fn sync_to_server(

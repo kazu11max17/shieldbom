@@ -139,6 +139,22 @@
     </div>
   </header>
 
+  {% if scan_gap_count > 0 %}
+  <div class="scan-incomplete" style="background:#ffebee;color:#8e0000;border:2px solid #c62828;border-radius:4px;padding:0.9rem 1.1rem;margin:1.5rem 0;font-size:0.9rem;">
+    <strong>SCAN INCOMPLETE</strong>
+    <div>
+      {{ scan_gap_count }} vulnerability lookup(s) failed or were not possible. The vulnerability
+      results below are a lower bound and are not evidence that the remaining components are
+      free of known vulnerabilities. Re-run the scan, or correct the SBOM entries listed below,
+      before relying on this report.
+    </div>
+    <ul>
+      {% for gap in scan_gaps %}<li>{{ gap }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
   <div class="summary-cards">
     <div class="card total">
       <div class="count">{{ stats.total_components }}</div>
@@ -220,7 +236,7 @@
       </tbody>
     </table>
     {% else %}
-    <div class="empty-state">No vulnerabilities found.</div>
+    <div class="empty-state">{% if scan_gap_count > 0 %}Scan incomplete: nothing was found in the lookups that succeeded. This is not a clean result.{% elif offline %}Offline scan: nothing was found in the local database snapshot. This is not a complete scan.{% elif unverified_count > 0 %}Nothing was found, but {{ unverified_count }} Debian/Ubuntu component(s) could not be verified: without source package information (an `upstream` qualifier) vulnerabilities may have been missed. This is not a clean result.{% else %}No vulnerabilities found.{% endif %}</div>
     {% endif %}
   </section>
 

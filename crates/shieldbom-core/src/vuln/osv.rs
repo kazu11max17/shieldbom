@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    AffectedVersions, Component, Severity, VersionRangeInfo, VulnMatch, VulnSource,
+    AffectedVersions, Component, ScanGap, Severity, VersionRangeInfo, VulnMatch, VulnSource,
 };
 
 const OSV_API_URL: &str = "https://api.osv.dev/v1/query";
@@ -10,8 +10,17 @@ const OSV_API_URL: &str = "https://api.osv.dev/v1/query";
 #[derive(Serialize)]
 struct OsvQuery {
     package: OsvPackage,
-    version: String,
+    /// OSV rejects the request (HTTP 400) when a version is given both here and
+    /// inside the PURL, so this is only set for version-less PURLs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    page_token: Option<String>,
 }
+
+/// Upper bound on result pages fetched per component. Beyond this the lookup
+/// is reported as truncated rather than complete.
+const MAX_PAGES: usize = 10;
 
 #[derive(Serialize)]
 struct OsvPackage {
@@ -22,6 +31,9 @@ struct OsvPackage {
 struct OsvResponse {
     #[serde(default)]
     vulns: Vec<OsvVuln>,
+    /// Present when more results exist than fit in this page.
+    #[serde(default)]
+    next_page_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,52 +78,265 @@ struct OsvEvent {
     fixed: Option<String>,
 }
 
-/// Query OSV for vulnerabilities for each component that has a PURL
-pub async fn query_batch(components: &[&Component]) -> Result<Vec<VulnMatch>> {
-    let client = reqwest::Client::new();
-    let mut results = Vec::new();
+/// True when the PURL carries its own version (`pkg:type/ns/name@version`).
+pub(crate) fn purl_has_version(purl: &str) -> bool {
+    let end = purl.find(['?', '#']).unwrap_or(purl.len());
+    let path = &purl[..end];
+    let name = path.rsplit('/').next().unwrap_or(path);
+    // A leading '@' is an unencoded npm scope, not a version separator.
+    matches!(name.rfind('@'), Some(i) if i > 0 && i + 1 < name.len())
+}
 
-    for component in components {
-        let Some(purl) = &component.purl else {
-            continue;
-        };
+/// Returns the PURL without the given qualifier, keeping everything else.
+fn without_qualifier(purl: &str, key: &str) -> String {
+    let (main, subpath) = match purl.split_once('#') {
+        Some((m, sub)) => (m, Some(sub)),
+        None => (purl, None),
+    };
+    let Some((base, qualifiers)) = main.split_once('?') else {
+        return purl.to_string();
+    };
+    let kept: Vec<&str> = qualifiers
+        .split('&')
+        .filter(|q| {
+            let name = q.split('=').next().unwrap_or("");
+            !q.is_empty() && !name.eq_ignore_ascii_case(key)
+        })
+        .collect();
+    let mut out = base.to_string();
+    if !kept.is_empty() {
+        out.push('?');
+        out.push_str(&kept.join("&"));
+    }
+    if let Some(sub) = subpath {
+        out.push('#');
+        out.push_str(sub);
+    }
+    out
+}
 
-        if component.version.is_empty() {
+/// Decodes `%XX` escapes; invalid escapes are kept as written.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        // Work on bytes, never on `&str` slices: a multi-byte character after
+        // '%' would put a slice boundary inside it and panic on SBOM input.
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && bytes[i + 1].is_ascii_hexdigit()
+            && bytes[i + 2].is_ascii_hexdigit()
+        {
+            let hex = |b: u8| (b as char).to_digit(16).unwrap_or(0) as u8;
+            out.push((hex(bytes[i + 1]) << 4) | hex(bytes[i + 2]));
+            i += 3;
             continue;
         }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
 
-        let query = OsvQuery {
-            package: OsvPackage { purl: purl.clone() },
-            version: component.version.clone(),
-        };
+/// The decoded value of the `upstream` qualifier (the Debian source package,
+/// optionally `name@version`), if present and non-empty.
+pub(crate) fn upstream_qualifier(purl: &str) -> Option<String> {
+    let main = purl.split('#').next().unwrap_or(purl);
+    let (_, qualifiers) = main.split_once('?')?;
+    qualifiers
+        .split('&')
+        .filter_map(|q| q.split_once('='))
+        .find(|(k, _)| k.eq_ignore_ascii_case("upstream"))
+        .map(|(_, v)| percent_decode(v))
+        .filter(|v| !v.trim().is_empty())
+}
 
-        match client.post(OSV_API_URL).json(&query).send().await {
-            Ok(resp) if resp.status().is_success() => {
-                if let Ok(osv_resp) = resp.json::<OsvResponse>().await {
-                    for vuln in osv_resp.vulns {
-                        results.push(convert_osv_vuln(&vuln, component));
-                    }
-                }
-            }
-            Ok(resp) => {
-                tracing::warn!(
-                    "OSV API returned {} for {}@{}",
-                    resp.status(),
-                    component.name,
-                    component.version
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "OSV API error for {}@{}: {e}",
-                    component.name,
-                    component.version
-                );
-            }
+/// Rewrites a Debian/Ubuntu binary-package PURL to its source package, which
+/// is how OSV.dev indexes those distributions. Uses the `upstream` qualifier
+/// (`upstream=openssl` or `upstream=openssl@3.0.11-1`); returns the PURL
+/// unchanged when there is none or it is not a `deb` PURL.
+pub(crate) fn to_source_package(purl: &str) -> String {
+    let is_deb = purl
+        .strip_prefix("pkg:")
+        .and_then(|rest| rest.split('/').next())
+        .is_some_and(|t| t.eq_ignore_ascii_case("deb"));
+    let Some(upstream) = upstream_qualifier(purl).filter(|_| is_deb) else {
+        return purl.to_string();
+    };
+    let (src_name, src_version) = match upstream.split_once('@') {
+        Some((n, v)) if !v.is_empty() => (n.trim(), Some(v.trim())),
+        Some((n, _)) => (n.trim(), None),
+        None => (upstream.trim(), None),
+    };
+    // Debian package names only use [a-z0-9.+-]; anything else is not a
+    // source package name and must not be spliced into the PURL.
+    let valid_name = |n: &str| {
+        !n.is_empty()
+            && n.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"+-.".contains(&b))
+    };
+    if !valid_name(src_name) {
+        return purl.to_string();
+    }
+
+    let without = without_qualifier(purl, "upstream");
+    // Split off qualifiers/subpath, then replace the last path segment's name.
+    let cut = without.find(['?', '#']).unwrap_or(without.len());
+    let (path, rest) = without.split_at(cut);
+    let Some(slash) = path.rfind('/') else {
+        return purl.to_string();
+    };
+    let (prefix, last) = path.split_at(slash + 1);
+    let binary_version = last.split_once('@').map(|(_, v)| v);
+    // A version taken from `upstream` must not smuggle in qualifiers or path.
+    if src_version
+        .is_some_and(|v| v.contains(['/', '?', '#', '&', '=']) || v.chars().any(char::is_control))
+    {
+        return purl.to_string();
+    }
+    let version = src_version.or(binary_version);
+    match version {
+        Some(v) => format!("{prefix}{src_name}@{v}{rest}"),
+        None => format!("{prefix}{src_name}{rest}"),
+    }
+}
+
+/// Builds the OSV request body, or `None` when no version is known at all.
+///
+/// The `distro` qualifier is dropped: OSV.dev reads its value as a release
+/// name and answers "no vulnerabilities" for spellings it does not know
+/// (`distro=debian-12` returns nothing where `distro=bookworm` or no
+/// qualifier returns results). Without it OSV.dev answers for all releases,
+/// which errs towards reporting too much rather than nothing.
+///
+/// Debian/Ubuntu binary package names are replaced by their source package
+/// (see [`to_source_package`]).
+fn build_query(purl: &str, component_version: &str) -> Option<OsvQuery> {
+    let purl = to_source_package(&without_qualifier(purl, "distro"));
+    let version = if purl_has_version(&purl) {
+        None
+    } else if component_version.is_empty() {
+        return None;
+    } else {
+        Some(component_version.to_string())
+    };
+    Some(OsvQuery {
+        package: OsvPackage { purl },
+        version,
+        page_token: None,
+    })
+}
+
+/// Reason text for a non-success OSV status, or `None` when the response is usable.
+fn status_failure(status: reqwest::StatusCode) -> Option<String> {
+    (!status.is_success()).then(|| format!("HTTP {}", status.as_u16()))
+}
+
+/// Why a component's lookup did not complete.
+struct Failure {
+    reason: String,
+    /// The host could not be reached (as opposed to answering with an error).
+    unreachable: bool,
+}
+
+impl Failure {
+    fn transport(e: &reqwest::Error) -> Self {
+        Self {
+            reason: super::describe_request_error(e).to_string(),
+            unreachable: super::is_unreachable(e),
         }
     }
 
-    Ok(results)
+    fn answered(reason: String) -> Self {
+        Self {
+            reason,
+            unreachable: false,
+        }
+    }
+}
+
+/// Runs one component's query to the last page. Findings read before a
+/// failure are still returned: dropping them could hide a known-exploited CVE.
+async fn query_component(
+    client: &reqwest::Client,
+    mut query: OsvQuery,
+    component: &Component,
+) -> (Vec<VulnMatch>, Option<Failure>) {
+    let mut results = Vec::new();
+
+    for _ in 0..MAX_PAGES {
+        let resp = match client.post(OSV_API_URL).json(&query).send().await {
+            Ok(resp) => resp,
+            Err(e) => return (results, Some(Failure::transport(&e))),
+        };
+        if let Some(reason) = status_failure(resp.status()) {
+            return (results, Some(Failure::answered(reason)));
+        }
+        let page: OsvResponse = match resp.json().await {
+            Ok(page) => page,
+            Err(e) => return (results, Some(Failure::transport(&e))),
+        };
+
+        for vuln in &page.vulns {
+            results.push(convert_osv_vuln(vuln, component));
+        }
+        match page.next_page_token {
+            Some(token) if !token.is_empty() => query.page_token = Some(token),
+            _ => return (results, None),
+        }
+    }
+
+    let reason = format!("results truncated (more than {MAX_PAGES} result pages)");
+    (results, Some(Failure::answered(reason)))
+}
+
+/// Query OSV for vulnerabilities for each component that has a PURL.
+///
+/// Every lookup that does not yield a complete, parsed answer is returned as a
+/// [`ScanGap`]; an empty vulnerability list alone never means "clean".
+pub async fn query_batch(components: &[&Component]) -> Result<(Vec<VulnMatch>, Vec<ScanGap>)> {
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
+    let mut results = Vec::new();
+    let mut gaps = Vec::new();
+    let mut streak = super::UnreachableStreak::default();
+
+    for component in components {
+        let Some(purl) = &component.purl else {
+            gaps.push(ScanGap::new(component, "OSV", "no PURL; not queried"));
+            continue;
+        };
+
+        let Some(query) = build_query(purl, &component.version) else {
+            gaps.push(ScanGap::new(
+                component,
+                "OSV",
+                "no version in SBOM; not queried",
+            ));
+            continue;
+        };
+
+        if streak.exhausted() {
+            gaps.push(ScanGap::new(
+                component,
+                "OSV",
+                "not queried: OSV.dev unreachable or not responding",
+            ));
+            continue;
+        }
+
+        let (vulns, failure) = query_component(&client, query, component).await;
+        results.extend(vulns);
+        streak.record(failure.as_ref().map(|f| f.unreachable));
+        if let Some(f) = failure {
+            gaps.push(ScanGap::new(component, "OSV", f.reason));
+        }
+    }
+
+    Ok((results, gaps))
 }
 
 fn convert_osv_vuln(vuln: &OsvVuln, component: &Component) -> VulnMatch {
@@ -377,6 +602,186 @@ mod tests {
     use super::*;
 
     // -- CVSS vector string parsing tests --
+
+    #[test]
+    fn test_purl_has_version() {
+        assert!(purl_has_version("pkg:npm/lodash@4.17.15"));
+        assert!(purl_has_version("pkg:generic/openssl@3.0.8"));
+        assert!(purl_has_version("pkg:npm/%40angular/core@16.0.0"));
+        assert!(purl_has_version("pkg:npm/@angular/core@16.0.0"));
+        assert!(purl_has_version("pkg:deb/debian/curl@7.88.1-10?arch=amd64"));
+        assert!(!purl_has_version("pkg:npm/lodash"));
+        assert!(!purl_has_version("pkg:npm/@angular/core"));
+        assert!(!purl_has_version(
+            "pkg:cargo/time?download_url=https://x/a@b"
+        ));
+        assert!(!purl_has_version("pkg:cargo/time@"));
+    }
+
+    // Regression: OSV answers HTTP 400 ("version specified in params and PURL
+    // query") when both are sent, which used to turn every lookup into 0 results.
+    #[test]
+    fn test_query_omits_version_when_purl_has_one() {
+        let q = build_query("pkg:npm/lodash@4.17.15", "4.17.15").unwrap();
+        let json = serde_json::to_value(&q).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"package": {"purl": "pkg:npm/lodash@4.17.15"}})
+        );
+    }
+
+    #[test]
+    fn test_query_sends_version_for_versionless_purl() {
+        let q = build_query("pkg:npm/lodash", "4.17.15").unwrap();
+        let json = serde_json::to_value(&q).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"package": {"purl": "pkg:npm/lodash"}, "version": "4.17.15"})
+        );
+    }
+
+    // Regression (v0.3.0): non-2xx answers were logged and dropped.
+    #[test]
+    fn test_status_failure() {
+        use reqwest::StatusCode;
+        assert_eq!(status_failure(StatusCode::OK), None);
+        assert_eq!(
+            status_failure(StatusCode::BAD_REQUEST).as_deref(),
+            Some("HTTP 400")
+        );
+        assert!(status_failure(StatusCode::TOO_MANY_REQUESTS).is_some());
+        assert!(status_failure(StatusCode::INTERNAL_SERVER_ERROR).is_some());
+    }
+
+    #[test]
+    fn test_response_exposes_next_page_token() {
+        let page: OsvResponse =
+            serde_json::from_str(r#"{"vulns":[],"next_page_token":"abc"}"#).unwrap();
+        assert_eq!(page.next_page_token.as_deref(), Some("abc"));
+        let last: OsvResponse = serde_json::from_str("{}").unwrap();
+        assert!(last.next_page_token.is_none());
+    }
+
+    #[test]
+    fn test_page_token_is_sent_when_set() {
+        let mut q = build_query("pkg:npm/lodash@4.17.15", "").unwrap();
+        q.page_token = Some("abc".to_string());
+        let json = serde_json::to_value(&q).unwrap();
+        assert_eq!(json["page_token"], "abc");
+    }
+
+    #[test]
+    fn test_without_qualifier() {
+        assert_eq!(
+            without_qualifier(
+                "pkg:deb/debian/curl@7.88.1-10?arch=amd64&distro=debian-12",
+                "distro"
+            ),
+            "pkg:deb/debian/curl@7.88.1-10?arch=amd64"
+        );
+        assert_eq!(
+            without_qualifier("pkg:deb/debian/curl@7.88.1-10?distro=debian-12", "distro"),
+            "pkg:deb/debian/curl@7.88.1-10"
+        );
+        assert_eq!(
+            without_qualifier(
+                "pkg:deb/debian/curl@1?DISTRO=x&arch=arm64#sub/path",
+                "distro"
+            ),
+            "pkg:deb/debian/curl@1?arch=arm64#sub/path"
+        );
+        assert_eq!(
+            without_qualifier("pkg:npm/lodash@4.17.15", "distro"),
+            "pkg:npm/lodash@4.17.15"
+        );
+    }
+
+    // Regression: OSV.dev answers 200 with no results for
+    // `pkg:deb/debian/...?distro=debian-12`, the spelling SBOM tools emit.
+    #[test]
+    fn test_query_never_sends_distro_qualifier() {
+        let q = build_query(
+            "pkg:deb/debian/curl@7.88.1-10?arch=amd64&distro=debian-12",
+            "7.88.1-10",
+        )
+        .unwrap();
+        let json = serde_json::to_value(&q).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"package": {"purl": "pkg:deb/debian/curl@7.88.1-10?arch=amd64"}})
+        );
+    }
+
+    #[test]
+    fn test_without_qualifier_matches_whole_key_only() {
+        assert_eq!(
+            without_qualifier("pkg:deb/debian/curl@1?distroname=x&distro=y", "distro"),
+            "pkg:deb/debian/curl@1?distroname=x"
+        );
+    }
+
+    #[test]
+    fn test_percent_decode() {
+        assert_eq!(percent_decode("openssl%403.0.11-1"), "openssl@3.0.11-1");
+        assert_eq!(percent_decode("a%2"), "a%2");
+        assert_eq!(percent_decode("a%zz"), "a%zz");
+        // Regression: these panicked (slice boundary inside a multi-byte
+        // character) or decoded a sign as a digit.
+        assert_eq!(percent_decode("%aé"), "%aé");
+        assert_eq!(percent_decode("%é"), "%é");
+        assert_eq!(percent_decode("%+1"), "%+1");
+        assert_eq!(percent_decode("%"), "%");
+    }
+
+    // Regression: OSV.dev returns nothing for Debian binary names
+    // (libssl3 -> 0, openssl -> 87 for the same version).
+    #[test]
+    fn test_debian_binary_name_is_queried_as_source_package() {
+        let q = build_query(
+            "pkg:deb/debian/libssl3@3.0.11-1~deb12u2?arch=amd64&upstream=openssl&distro=debian-12",
+            "3.0.11-1~deb12u2",
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::to_value(&q).unwrap(),
+            serde_json::json!({"package": {"purl": "pkg:deb/debian/openssl@3.0.11-1~deb12u2?arch=amd64"}})
+        );
+    }
+
+    #[test]
+    fn test_upstream_with_version_uses_source_version() {
+        assert_eq!(
+            to_source_package(
+                "pkg:deb/debian/zlib1g@1:1.2.13.dfsg-1?upstream=zlib%401:1.2.13.dfsg-1"
+            ),
+            "pkg:deb/debian/zlib@1:1.2.13.dfsg-1"
+        );
+        assert_eq!(
+            to_source_package("pkg:deb/ubuntu/libssl3@3.0.2-0ubuntu1.10?upstream=openssl#sub"),
+            "pkg:deb/ubuntu/openssl@3.0.2-0ubuntu1.10#sub"
+        );
+    }
+
+    #[test]
+    fn test_to_source_package_leaves_others_alone() {
+        for purl in [
+            "pkg:deb/debian/curl@7.88.1-10",
+            "pkg:npm/lodash@4.17.15?upstream=x",
+            "pkg:deb/debian/libssl3@1?upstream=",
+            "pkg:deb/debian/libssl3@1?upstream=a%2Fb",
+            "pkg:deb/debian/libssl3@1?upstream=a%26b%3Dc",
+            "pkg:deb/debian/libssl3@1?upstream=Open%20SSL",
+            "pkg:deb/debian/libssl3@1?upstream=%aé",
+            "pkg:deb/debian/libssl3@1?upstream=openssl%40x%3Fdistro%3Ddebian-12",
+        ] {
+            assert_eq!(to_source_package(purl), purl);
+        }
+    }
+
+    #[test]
+    fn test_query_none_without_any_version() {
+        assert!(build_query("pkg:npm/lodash", "").is_none());
+    }
 
     #[test]
     fn test_cvss_v31_critical_all_high() {

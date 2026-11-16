@@ -24,6 +24,11 @@ pub fn render_html(report: &AnalysisReport) -> Result<String> {
 fn build_context(report: &AnalysisReport) -> Result<tera::Context> {
     let mut ctx = tera::Context::new();
 
+    // Drives the "scan incomplete" banner.
+    ctx.insert("scan_gaps", &super::scan_gap_lines(report));
+    ctx.insert("scan_gap_count", &report.scan_gaps.len());
+    ctx.insert("offline", &report.offline);
+    ctx.insert("unverified_count", &report.unverified.len());
     ctx.insert("sbom_file", &report.sbom_file.display().to_string());
     ctx.insert("format_detected", &report.format_detected.to_string());
     ctx.insert(
@@ -332,5 +337,63 @@ mod tests {
                 severity
             );
         }
+    }
+
+    fn gap(name: &str) -> crate::models::ScanGap {
+        crate::models::ScanGap {
+            component_name: name.to_string(),
+            component_version: "1.0.0".to_string(),
+            source: "OSV".to_string(),
+            reason: "could not connect".to_string(),
+        }
+    }
+
+    fn empty_report() -> AnalysisReport {
+        AnalysisReport::new(
+            PathBuf::from("x.json"),
+            SourceFormat::Unknown,
+            vec![],
+            vec![],
+            vec![],
+        )
+    }
+
+    #[test]
+    fn test_html_incomplete_scan_banner() {
+        let report = sample_report().with_scan_gaps(vec![gap("<script>x</script>")]);
+        let html = render_html(&report).unwrap();
+        assert!(html.contains("SCAN INCOMPLETE"));
+        assert!(html.contains("[OSV]: could not connect"));
+        assert!(!html.contains("<script>x</script>"));
+    }
+
+    #[test]
+    fn test_html_complete_scan_has_no_banner() {
+        let html = render_html(&sample_report()).unwrap();
+        assert!(!html.contains("SCAN INCOMPLETE"));
+    }
+
+    #[test]
+    fn test_html_unverified_has_no_clean_empty_state() {
+        let report = empty_report().with_unverified(vec!["zlib1g@1".to_string()]);
+        let html = render_html(&report).unwrap();
+        assert!(!html.contains("No vulnerabilities found."));
+        assert!(html.contains("could not be verified"));
+    }
+
+    #[test]
+    fn test_html_offline_scan_has_no_clean_empty_state() {
+        let html = render_html(&empty_report().with_offline(true)).unwrap();
+        assert!(!html.contains("No vulnerabilities found."));
+        assert!(html.contains("local database snapshot"));
+    }
+
+    // Regression: the banner sat next to "No vulnerabilities found."
+    #[test]
+    fn test_html_incomplete_scan_has_no_clean_empty_state() {
+        let html = render_html(&empty_report().with_scan_gaps(vec![gap("openssl")])).unwrap();
+        assert!(!html.contains("No vulnerabilities found."));
+        let clean = render_html(&empty_report()).unwrap();
+        assert!(clean.contains("No vulnerabilities found."));
     }
 }

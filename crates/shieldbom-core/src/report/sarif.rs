@@ -52,15 +52,46 @@ struct SarifRun {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     artifacts: Vec<SarifArtifact>,
     results: Vec<SarifResult>,
+    /// Standard SARIF channel for "did the tool run to completion": consumers
+    /// that ignore custom properties still see an incomplete scan here.
+    invocations: Vec<SarifInvocation>,
     /// Run-level properties (disclaimer, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     properties: Option<SarifRunPropertyBag>,
 }
 
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct SarifInvocation {
+    /// False when at least one vulnerability lookup failed.
+    execution_successful: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tool_execution_notifications: Vec<SarifNotification>,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct SarifNotification {
+    level: &'static str,
+    message: SarifNotificationMessage,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct SarifNotificationMessage {
+    text: String,
+}
+
 /// Property bag for run-level metadata.
 #[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 struct SarifRunPropertyBag {
     disclaimer: String,
+    /// False when some lookups failed: `results` is then a lower bound.
+    scan_complete: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    scan_gaps: Vec<String>,
+    /// Components whose empty result could not be verified (not a failure).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unverified: Vec<String>,
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -301,12 +332,60 @@ impl SarifLog {
                 },
                 artifacts,
                 results,
+                invocations: vec![SarifInvocation {
+                    execution_successful: report.is_complete(),
+                    tool_execution_notifications: gap_notifications(report),
+                }],
                 properties: Some(SarifRunPropertyBag {
                     disclaimer: report.disclaimer.clone(),
+                    scan_complete: report.is_complete(),
+                    scan_gaps: super::scan_gap_lines(report),
+                    unverified: report.unverified.clone(),
                 }),
             }],
         }
     }
+}
+
+/// One notification per listed failed lookup, plus one stating how many were
+/// not listed. Built from the gaps themselves, so no SBOM string can pass for
+/// the summary line.
+fn gap_notifications(report: &AnalysisReport) -> Vec<SarifNotification> {
+    let note = |text: String| SarifNotification {
+        level: "error",
+        message: SarifNotificationMessage { text },
+    };
+    let mut notes: Vec<SarifNotification> = report
+        .scan_gaps
+        .iter()
+        .take(super::MAX_LISTED_GAPS)
+        .map(|g| {
+            note(format!(
+                "Vulnerability lookup failed: {}",
+                super::format_scan_gap(g)
+            ))
+        })
+        .collect();
+    let unlisted = report
+        .scan_gaps
+        .len()
+        .saturating_sub(super::MAX_LISTED_GAPS);
+    if unlisted > 0 {
+        notes.push(note(format!("{unlisted} more failed lookup(s) not listed")));
+    }
+    if !report.unverified.is_empty() {
+        notes.push(SarifNotification {
+            level: "warning",
+            message: SarifNotificationMessage {
+                text: format!(
+                    "{} Debian/Ubuntu component(s) without source package information had no findings; vulnerabilities may have been missed: {}",
+                    report.unverified.len(),
+                    super::summarize_names(&report.unverified)
+                ),
+            },
+        });
+    }
+    notes
 }
 
 fn build_result(
@@ -691,5 +770,93 @@ mod tests {
             rule.help_uri,
             Some("https://github.com/advisories/GHSA-xxxx-yyyy-zzzz".to_string())
         );
+    }
+
+    #[test]
+    fn test_sarif_marks_incomplete_scan() {
+        let report = sample_report(vec![]).with_scan_gaps(vec![crate::models::ScanGap {
+            component_name: "openssl".to_string(),
+            component_version: "3.0.8".to_string(),
+            source: "NVD".to_string(),
+            reason: "could not connect".to_string(),
+        }]);
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&report).unwrap()).unwrap();
+        let run = &json["runs"][0];
+        assert_eq!(run["properties"]["scanComplete"], false);
+        assert_eq!(
+            run["properties"]["scanGaps"][0],
+            "openssl @ 3.0.8 [NVD]: could not connect"
+        );
+        assert!(run["properties"]["disclaimer"].is_string());
+        // Standard location, for consumers that ignore custom properties.
+        let invocation = &run["invocations"][0];
+        assert_eq!(invocation["executionSuccessful"], false);
+        let note = &invocation["toolExecutionNotifications"][0];
+        assert_eq!(note["level"], "error");
+        assert!(note["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("openssl @ 3.0.8"));
+    }
+
+    #[test]
+    fn test_sarif_complete_scan_has_no_gaps_key() {
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&sample_report(vec![])).unwrap()).unwrap();
+        let run = &json["runs"][0];
+        assert_eq!(run["properties"]["scanComplete"], true);
+        assert!(run["properties"].get("scanGaps").is_none());
+        assert!(run["properties"]["disclaimer"].is_string());
+        assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+        assert!(run["invocations"][0]
+            .get("toolExecutionNotifications")
+            .is_none());
+    }
+
+    // A component named like the summary line must still read as a failure.
+    #[test]
+    fn test_sarif_summary_line_cannot_be_forged() {
+        let mut gaps: Vec<_> = (0..51)
+            .map(|i| crate::models::ScanGap {
+                component_name: format!("c{i}"),
+                component_version: "1".to_string(),
+                source: "NVD".to_string(),
+                reason: "HTTP 503".to_string(),
+            })
+            .collect();
+        gaps[0].component_name = "... and 9 more".to_string();
+        let report = sample_report(vec![]).with_scan_gaps(gaps);
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&report).unwrap()).unwrap();
+        let notes = json["runs"][0]["invocations"][0]["toolExecutionNotifications"]
+            .as_array()
+            .unwrap();
+        assert_eq!(notes.len(), 51);
+        assert!(notes[0]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("Vulnerability lookup failed: ... and 9 more"));
+        assert_eq!(
+            notes[50]["message"]["text"],
+            "1 more failed lookup(s) not listed"
+        );
+    }
+
+    // Unverified is a warning, not a failure: execution still succeeded.
+    #[test]
+    fn test_sarif_reports_unverified_as_warning() {
+        let report = sample_report(vec![]).with_unverified(vec!["zlib1g@1:1.2.13".to_string()]);
+        let json: serde_json::Value =
+            serde_json::from_str(&to_sarif_string(&report).unwrap()).unwrap();
+        let run = &json["runs"][0];
+        assert_eq!(run["invocations"][0]["executionSuccessful"], true);
+        let note = &run["invocations"][0]["toolExecutionNotifications"][0];
+        assert_eq!(note["level"], "warning");
+        assert!(note["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("zlib1g@1:1.2.13"));
+        assert_eq!(run["properties"]["unverified"][0], "zlib1g@1:1.2.13");
     }
 }

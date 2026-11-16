@@ -28,4 +28,5 @@ This policy covers the ShieldBOM CLI tool and its dependencies. Issues in upstre
 
 | Version | Supported |
 |---------|-----------|
-| 0.1.x   | Yes       |
+| 0.3.1 and later | Yes |
+| 0.3.0 and earlier | No (can under-report vulnerabilities; upgrade to 0.3.1 or later) |
