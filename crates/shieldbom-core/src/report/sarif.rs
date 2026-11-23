@@ -228,7 +228,7 @@ struct SarifPropertyBag {
     component_name: Option<String>,
     #[serde(rename = "componentVersion", skip_serializing_if = "Option::is_none")]
     component_version: Option<String>,
-    /// Set on results matched by name only (see `VulnMatch::unconfirmed`).
+    /// Set on results NVD's data cannot confirm (see `VulnMatch::unconfirmed`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     unconfirmed: bool,
 }

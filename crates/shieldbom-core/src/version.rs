@@ -13,12 +13,40 @@ use std::fmt;
 /// - `1.2.3-rc1`
 /// - `1.2` (treated as `1.2.0`)
 /// - `1` (treated as `1.0.0`)
+/// - `1.0.1g`, `1.0.2zh` (OpenSSL-style letter releases: `1.0.1 < 1.0.1a <
+///   1.0.1z < 1.0.1za < 1.0.2`)
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SemVer {
     pub major: u64,
     pub minor: u64,
     pub patch: u64,
+    /// Letter release suffix on the last numeric part (`g` in `1.0.1g`).
+    /// Sorts after the bare version.
+    pub letter: Option<String>,
     pub pre: Option<String>,
+}
+
+/// Split a numeric version part with an optional OpenSSL-style letter
+/// release (`1g` -> (1, Some("g"))). Only 1-2 lowercase letters are taken,
+/// and not `rc`, so pre-release spellings like `1rc` or `0beta` stay
+/// unparseable instead of being ordered after the release.
+///
+/// Known limitation: the letter is always read the OpenSSL way, as a later
+/// release (also right for libjpeg `9e` or tzdata `2024a`). A project that
+/// writes a pre-release as a bare letter (`2.0b` for a beta of 2.0) is
+/// ordered wrongly: `2.0b` sorts after `2.0`, so a CVE fixed in 2.0 can be
+/// missed on `2.0b`. Spellings with digits (`2.0b1`, `8.0p1`) are not parsed.
+fn parse_numeric_part(s: &str) -> Option<(u64, Option<String>)> {
+    let digits_end = s.find(|c: char| !c.is_ascii_digit()).unwrap_or(s.len());
+    let (num, rest) = s.split_at(digits_end);
+    let num = num.parse::<u64>().ok()?;
+    if rest.is_empty() {
+        return Some((num, None));
+    }
+    if rest.len() <= 2 && rest != "rc" && rest.bytes().all(|b| b.is_ascii_lowercase()) {
+        return Some((num, Some(rest.to_string())));
+    }
+    None
 }
 
 impl SemVer {
@@ -51,22 +79,31 @@ impl SemVer {
             return None;
         }
 
-        let major = parts[0].parse::<u64>().ok()?;
-        let minor = if let Some(s) = parts.get(1) {
-            s.parse::<u64>().ok()?
+        // A letter release is only accepted on the last part ("1.0.1g"),
+        // not in the middle ("1.0a.1").
+        // With a fourth part ("1.2.3.4", which is otherwise ignored), no
+        // letter is accepted at all.
+        let last = if parts.len() > 3 {
+            usize::MAX
         } else {
-            0
+            parts.len() - 1
         };
-        let patch = if let Some(s) = parts.get(2) {
-            s.parse::<u64>().ok()?
-        } else {
-            0
-        };
+        let mut nums = [0u64; 3];
+        let mut letter = None;
+        for (i, part) in parts.iter().take(3).enumerate() {
+            let (n, l) = parse_numeric_part(part)?;
+            if l.is_some() && i != last {
+                return None;
+            }
+            nums[i] = n;
+            letter = l;
+        }
 
         Some(SemVer {
-            major,
-            minor,
-            patch,
+            major: nums[0],
+            minor: nums[1],
+            patch: nums[2],
+            letter,
             pre,
         })
     }
@@ -80,6 +117,9 @@ impl SemVer {
 impl fmt::Display for SemVer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
+        if let Some(letter) = &self.letter {
+            write!(f, "{}", letter)?;
+        }
         if let Some(pre) = &self.pre {
             write!(f, "-{}", pre)?;
         }
@@ -98,6 +138,13 @@ impl Ord for SemVer {
             ord => return ord,
         }
         match self.patch.cmp(&other.patch) {
+            Ordering::Equal => {}
+            ord => return ord,
+        }
+        // Letter releases come after the bare version, shorter first:
+        // 1.0.1 < 1.0.1a < 1.0.1z < 1.0.1za
+        let letter_key = |l: &Option<String>| l.as_ref().map(|s| (s.len(), s.clone()));
+        match letter_key(&self.letter).cmp(&letter_key(&other.letter)) {
             Ordering::Equal => {}
             ord => return ord,
         }
@@ -151,26 +198,50 @@ pub struct VersionRange {
     pub start_excluding: Option<SemVer>,
     pub end_including: Option<SemVer>,
     pub end_excluding: Option<SemVer>,
+    /// A boundary was given but could not be parsed. The range is then not
+    /// comparable: dropping the boundary would widen it (v0.3.2 reported
+    /// Heartbleed, `>=1.0.1, <1.0.1g`, on OpenSSL 3.0.8).
+    pub unparsed: bool,
 }
 
 impl VersionRange {
     /// Create a range from NVD-style version boundary strings.
+    /// A boundary that is present but unparseable sets `unparsed`.
     pub fn from_nvd(
         start_including: Option<&str>,
         start_excluding: Option<&str>,
         end_including: Option<&str>,
         end_excluding: Option<&str>,
     ) -> Self {
+        let mut unparsed = false;
+        let mut parse = |s: Option<&str>| {
+            let s = s?;
+            let v = SemVer::parse(s);
+            if v.is_none() {
+                unparsed = true;
+            }
+            v
+        };
+        let start_including = parse(start_including);
+        let start_excluding = parse(start_excluding);
+        let end_including = parse(end_including);
+        let end_excluding = parse(end_excluding);
         Self {
-            start_including: start_including.and_then(SemVer::parse),
-            start_excluding: start_excluding.and_then(SemVer::parse),
-            end_including: end_including.and_then(SemVer::parse),
-            end_excluding: end_excluding.and_then(SemVer::parse),
+            start_including,
+            start_excluding,
+            end_including,
+            end_excluding,
+            unparsed,
         }
     }
 
     /// Check whether a version falls within this range.
+    /// Always false when a boundary could not be parsed (`unparsed`); callers
+    /// must check that first rather than read false as "not affected".
     pub fn contains(&self, version: &SemVer) -> bool {
+        if self.unparsed {
+            return false;
+        }
         // Check lower bound
         if let Some(ref start) = self.start_including {
             if version < start {
@@ -199,8 +270,10 @@ impl VersionRange {
     }
 
     /// Returns true if this range has no bounds at all (matches everything).
+    /// A range with an unparseable boundary is not unbounded.
     pub fn is_unbounded(&self) -> bool {
-        self.start_including.is_none()
+        !self.unparsed
+            && self.start_including.is_none()
             && self.start_excluding.is_none()
             && self.end_including.is_none()
             && self.end_excluding.is_none()
@@ -536,6 +609,91 @@ mod tests {
     #[test]
     fn test_parse_cpe_invalid() {
         assert!(parse_cpe_parts("not-a-cpe").is_none());
+    }
+
+    // -- OpenSSL-style letter releases (v0.3.3) --
+
+    #[test]
+    fn test_parse_letter_release() {
+        let v = SemVer::parse("1.0.1g").unwrap();
+        assert_eq!((v.major, v.minor, v.patch), (1, 0, 1));
+        assert_eq!(v.letter.as_deref(), Some("g"));
+        assert_eq!(v.pre, None);
+        assert_eq!(v.to_string(), "1.0.1g");
+        assert_eq!(
+            SemVer::parse("1.0.2zh").unwrap().letter.as_deref(),
+            Some("zh")
+        );
+        assert_eq!(
+            SemVer::parse("0.9.8t").unwrap().letter.as_deref(),
+            Some("t")
+        );
+    }
+
+    #[test]
+    fn test_parse_letter_release_rejects_other_suffixes() {
+        // Pre-release spellings must not sort after the release.
+        assert!(SemVer::parse("1.0.0rc").is_none());
+        assert!(SemVer::parse("1.0.0beta").is_none());
+        assert!(SemVer::parse("1.0.0rc1").is_none());
+        assert!(SemVer::parse("1.0.0G").is_none());
+        // Only on the last part.
+        assert!(SemVer::parse("1.0a.1").is_none());
+        assert!(SemVer::parse("1.2.3a.4").is_none());
+        // Dates are still not versions.
+        assert!(SemVer::parse("2024-05-20").is_some_and(|v| v.major == 2024));
+    }
+
+    #[test]
+    fn test_letter_release_edge_cases() {
+        let p = |s| SemVer::parse(s).unwrap();
+        // Two parts: the letter belongs to the last given part.
+        assert_eq!(p("1.0g"), p("1.0.0g"));
+        // Debian revision is read as a pre-release of the letter release.
+        assert!(p("0.9.8b") < p("0.9.8c-1"));
+        assert!(p("0.9.8c-1") < p("0.9.8c"));
+        // Known limitation (see parse_numeric_part): a bare letter is a
+        // later release, never a pre-release.
+        assert!(p("2.0b") > p("2.0"));
+    }
+
+    #[test]
+    fn test_ordering_letter_release() {
+        let p = |s| SemVer::parse(s).unwrap();
+        assert!(p("1.0.1") < p("1.0.1a"));
+        assert!(p("1.0.1a") < p("1.0.1g"));
+        assert!(p("1.0.1z") < p("1.0.1za"));
+        assert!(p("1.0.2zh") < p("1.0.3"));
+        assert!(p("1.0.1zz") < p("1.0.2"));
+        assert!(p("0.9.8zh") < p("1.0.0"));
+        assert!(p("3.0.8") > p("1.0.1g"));
+    }
+
+    #[test]
+    fn test_range_letter_bounds() {
+        // Regression (v0.3.2): "1.0.1g" did not parse and the bound was
+        // dropped, so Heartbleed's range matched OpenSSL 3.0.8.
+        let heartbleed = VersionRange::from_nvd(Some("1.0.1"), None, None, Some("1.0.1g"));
+        assert!(!heartbleed.unparsed);
+        assert!(heartbleed.contains(&SemVer::parse("1.0.1f").unwrap()));
+        assert!(heartbleed.contains(&SemVer::parse("1.0.1").unwrap()));
+        assert!(!heartbleed.contains(&SemVer::parse("1.0.1g").unwrap()));
+        assert!(!heartbleed.contains(&SemVer::parse("3.0.8").unwrap()));
+
+        let upto = VersionRange::from_nvd(None, None, Some("0.9.8t"), None);
+        assert!(!upto.contains(&SemVer::parse("3.0.8").unwrap()));
+        assert!(upto.contains(&SemVer::parse("0.9.8t").unwrap()));
+    }
+
+    #[test]
+    fn test_range_unparseable_bound_is_not_dropped() {
+        let r = VersionRange::from_nvd(Some("1.0.0"), None, None, Some("2.4.x"));
+        let r2 = VersionRange::from_nvd(None, None, Some("not a version"), None);
+        for r in [r, r2] {
+            assert!(r.unparsed);
+            assert!(!r.is_unbounded());
+            assert!(!r.contains(&SemVer::parse("3.0.8").unwrap()));
+        }
     }
 
     #[test]

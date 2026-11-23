@@ -183,13 +183,13 @@ const STATUS_FAIL: &str = "Fail";
 const STATUS_REVIEW: &str = "Review";
 const STATUS_NA: &str = "N/A";
 
-/// Evidence sentence for findings matched by name only.
+/// Evidence sentence for findings NVD's data cannot confirm.
 fn unconfirmed_note(count: usize) -> String {
     if count == 0 {
         return String::new();
     }
     format!(
-        " {count} finding(s) are unconfirmed: matched by name only, because NVD has not analysed which products and versions the CVE affects (awaiting analysis or deferred); each must be checked for applicability."
+        " {count} finding(s) are unconfirmed: it could not be confirmed from NVD's data whether this version is affected (the CVE has not been analysed, i.e. awaiting analysis or deferred, or its version range could not be compared); each must be checked for applicability."
     )
 }
 

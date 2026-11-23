@@ -357,7 +357,8 @@ enum Applicability {
     Confirmed,
     /// Could not be checked: NVD has no configuration for the CVE (common for
     /// "Awaiting Analysis" / "Deferred" records, which a keyword search returns
-    /// whenever the name appears in the description). Reported, but flagged.
+    /// whenever the name appears in the description), or a matching CPE entry
+    /// has a version boundary that cannot be parsed. Reported, but flagged.
     Unconfirmed,
     NotAffected,
 }
@@ -380,6 +381,10 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
         }
     };
 
+    // A matching CPE entry whose version could not be compared. If nothing
+    // else confirms the match, report it as unconfirmed instead of dropping it.
+    let mut not_comparable = false;
+
     for config in &cve.configurations {
         for node in &config.nodes {
             for cpe_match in &node.cpe_match {
@@ -400,7 +405,11 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
                     cpe_match.version_end_excluding.as_deref(),
                 );
 
-                if range.is_unbounded() {
+                if range.unparsed {
+                    // Do not drop the boundary: that widens the range (v0.3.2
+                    // put Heartbleed, `<1.0.1g`, on OpenSSL 3.0.8).
+                    not_comparable = true;
+                } else if range.is_unbounded() {
                     // No version range specified in the match criteria.
                     // Check if the CPE itself has a specific version.
                     if let Some(cpe_parts) = parse_cpe_parts(&cpe_match.criteria) {
@@ -410,8 +419,10 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
                                 if component_version == cpe_ver {
                                     return Applicability::Confirmed;
                                 }
+                            } else if cpe_ver_str != "-" {
+                                // "-" is "not applicable" in CPE, not a version.
+                                not_comparable = true;
                             }
-                            // If we can't parse the CPE version, fall through
                         } else {
                             // CPE version is wildcard (*) - matches all versions
                             return Applicability::Confirmed;
@@ -424,7 +435,11 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
         }
     }
 
-    Applicability::NotAffected
+    if not_comparable {
+        Applicability::Unconfirmed
+    } else {
+        Applicability::NotAffected
+    }
 }
 
 /// Check if a CPE match criteria string applies to a given component,
@@ -706,8 +721,8 @@ mod tests {
             Some("cpe:2.3:a:openssl:openssl:1.1.1k:*:*:*:*:*:*:*"),
         );
 
-        // Note: "1.1.1k" won't parse as semver cleanly (the 'k' part),
-        // so the function should fall back to accepting the match.
+        // "1.1.1k" and "1.1.1t" are OpenSSL letter releases; both parse
+        // since v0.3.3, and 1.1.1 <= 1.1.1k < 1.1.1t.
         let cve = NvdCve {
             id: "CVE-2024-TEST".to_string(),
             descriptions: vec![],
@@ -726,10 +741,106 @@ mod tests {
             }],
         };
 
-        // Can't parse "1.1.1k" as semver: accepted as in 0.3.1. Not marked
-        // unconfirmed: NVD does have product data, and a KEV entry here must
-        // still produce a Fail (e.g. Heartbleed on 1.0.1f).
         assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
+    }
+
+    fn openssl_cve(cpe: &str, start_incl: Option<&str>, end_excl: Option<&str>) -> NvdCve {
+        NvdCve {
+            id: "CVE-2014-0160".to_string(),
+            descriptions: vec![],
+            metrics: NvdMetrics::default(),
+            configurations: vec![NvdConfiguration {
+                nodes: vec![NvdNode {
+                    cpe_match: vec![NvdCpeMatch {
+                        vulnerable: true,
+                        criteria: cpe.to_string(),
+                        version_start_including: start_incl.map(str::to_string),
+                        version_start_excluding: None,
+                        version_end_excluding: end_excl.map(str::to_string),
+                        version_end_including: None,
+                    }],
+                }],
+            }],
+        }
+    }
+
+    // Regression (v0.3.2): "1.0.1g" did not parse, the bound was dropped and
+    // Heartbleed (KEV) was confirmed on OpenSSL 3.0.8, failing the CRA check.
+    #[test]
+    fn test_affects_component_letter_release_bound() {
+        let cve = openssl_cve(
+            "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*",
+            Some("1.0.1"),
+            Some("1.0.1g"),
+        );
+        let new = make_component("openssl", "3.0.8", None);
+        assert_eq!(affects_component(&cve, &new), Applicability::NotAffected);
+        // A KEV entry on an affected version must still be confirmed (Fail).
+        let old = make_component("openssl", "1.0.1f", None);
+        assert_eq!(affects_component(&cve, &old), Applicability::Confirmed);
+    }
+
+    #[test]
+    fn test_affects_component_unparseable_bound_is_unconfirmed() {
+        let cve = openssl_cve(
+            "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*",
+            Some("1.0.1"),
+            Some("2.4.x"),
+        );
+        let comp = make_component("openssl", "3.0.8", None);
+        assert_eq!(affects_component(&cve, &comp), Applicability::Unconfirmed);
+    }
+
+    fn two_entries(first: NvdCpeMatch, second: NvdCpeMatch) -> NvdCve {
+        NvdCve {
+            id: "CVE-2024-TEST".to_string(),
+            descriptions: vec![],
+            metrics: NvdMetrics::default(),
+            configurations: vec![NvdConfiguration {
+                nodes: vec![NvdNode {
+                    cpe_match: vec![first, second],
+                }],
+            }],
+        }
+    }
+
+    fn entry(start_incl: &str, end_excl: &str) -> NvdCpeMatch {
+        NvdCpeMatch {
+            vulnerable: true,
+            criteria: "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*".to_string(),
+            version_start_including: Some(start_incl.to_string()),
+            version_start_excluding: None,
+            version_end_excluding: Some(end_excl.to_string()),
+            version_end_including: None,
+        }
+    }
+
+    #[test]
+    fn test_affects_component_unparseable_entry_mixed() {
+        let comp = make_component("openssl", "3.0.8", None);
+        // Another entry confirms the version: the unparseable one does not
+        // downgrade it, in either order.
+        let a = two_entries(entry("1.0.1", "2.4.x"), entry("3.0.0", "3.0.9"));
+        let b = two_entries(entry("3.0.0", "3.0.9"), entry("1.0.1", "2.4.x"));
+        assert_eq!(affects_component(&a, &comp), Applicability::Confirmed);
+        assert_eq!(affects_component(&b, &comp), Applicability::Confirmed);
+        // The other entry is out of range: still unconfirmed, not dropped.
+        let c = two_entries(entry("1.0.1", "2.4.x"), entry("1.1.1", "1.1.1u"));
+        assert_eq!(affects_component(&c, &comp), Applicability::Unconfirmed);
+    }
+
+    #[test]
+    fn test_affects_component_exact_cpe_versions() {
+        let comp = make_component("openssl", "1.0.1g", None);
+        let same = openssl_cve("cpe:2.3:a:openssl:openssl:1.0.1g:*:*:*:*:*:*:*", None, None);
+        assert_eq!(affects_component(&same, &comp), Applicability::Confirmed);
+        let other = openssl_cve("cpe:2.3:a:openssl:openssl:1.0.1h:*:*:*:*:*:*:*", None, None);
+        assert_eq!(affects_component(&other, &comp), Applicability::NotAffected);
+        // "-" (not applicable) is not a version to compare against.
+        let na = openssl_cve("cpe:2.3:a:openssl:openssl:-:*:*:*:*:*:*:*", None, None);
+        assert_eq!(affects_component(&na, &comp), Applicability::NotAffected);
+        let odd = openssl_cve("cpe:2.3:a:openssl:openssl:2.4.x:*:*:*:*:*:*:*", None, None);
+        assert_eq!(affects_component(&odd, &comp), Applicability::Unconfirmed);
     }
 
     #[test]

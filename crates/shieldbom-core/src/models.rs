@@ -96,9 +96,10 @@ pub struct VulnMatch {
     pub in_kev: bool,
     /// CISA KEV remediation due date (if applicable).
     pub kev_due_date: Option<chrono::NaiveDate>,
-    /// The match rests on a name search alone: NVD holds no product or version
-    /// data for this CVE (awaiting analysis or deferred), so it was not
-    /// possible to confirm that this component and version are affected.
+    /// It was not possible to confirm that this component and version are
+    /// affected: NVD holds no product or version data for this CVE (awaiting
+    /// analysis or deferred; the match rests on a name search alone), or the
+    /// matching CPE entry has a version boundary that cannot be compared.
     /// Kept as a finding so nothing is hidden, but shown as needing review.
     #[serde(default)]
     pub unconfirmed: bool,

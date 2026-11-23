@@ -215,7 +215,7 @@
   <section>
     <h2>Vulnerabilities ({{ vulnerabilities | length }})</h2>
     {% if vulnerabilities | length > 0 %}
-    {% if unconfirmed_count > 0 %}<p class="unconfirmed-note">{{ unconfirmed_count }} finding(s) are marked Unconfirmed: they were matched by name only because NVD has not analysed which products and versions the CVE affects (awaiting analysis or deferred). Some may concern other products that bundle or fork the component. Check whether each applies.</p>
+    {% if unconfirmed_count > 0 %}<p class="unconfirmed-note">{{ unconfirmed_count }} finding(s) are marked Unconfirmed: it could not be confirmed from NVD's data whether this version is affected, because NVD has not analysed the CVE (awaiting analysis or deferred) or its version range could not be compared. Some may concern other products that bundle or fork the component. Check whether each applies.</p>
     {% endif %}<table>
       <thead>
         <tr>
@@ -229,7 +229,7 @@
       <tbody>
         {% for vuln in vulnerabilities %}
         <tr>
-          <td><strong>{{ vuln.cve_id }}</strong>{% if vuln.unconfirmed %}<br><span class="unconfirmed" title="Matched by name only: NVD has not analysed which products and versions this CVE affects.">Unconfirmed</span>{% endif %}</td>
+          <td><strong>{{ vuln.cve_id }}</strong>{% if vuln.unconfirmed %}<br><span class="unconfirmed" title="It could not be confirmed from NVD's data whether this version is affected.">Unconfirmed</span>{% endif %}</td>
           <td><span class="severity-badge severity-{{ vuln.severity_class }}">{{ vuln.severity }}</span></td>
           <td>{% if vuln.cvss_score %}{{ vuln.cvss_score }}{% else %}-{% endif %}</td>
           <td>{{ vuln.component_name }} @ {{ vuln.component_version }}</td>

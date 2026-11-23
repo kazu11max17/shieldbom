@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+If you scanned components with OpenSSL-style versions, or whose NVD data uses them (such
+as OpenSSL 1.0.x or 1.1.x), with 0.3.2 or earlier, re-run the scan and regenerate any CRA report.
+Those versions could report findings outside the affected range, including a `FAIL` for
+"Delivered without known exploitable vulnerabilities". This concerns the NVD lookup only.
+
+### Fixed
+- **OpenSSL-style versions with a letter (`1.0.1g`, `1.0.2zh`) are now compared
+  correctly.** Earlier versions could not parse them and silently dropped such a boundary
+  from NVD's version range, which widened the range. In November 2026, scanning OpenSSL
+  3.0.8 reported 259 findings, among them CVEs fixed in 0.9.x and 1.0.x and Heartbleed
+  (CVE-2014-0160, affecting 1.0.1 through 1.0.1f and 1.0.2-beta1), so the CRA report
+  issued `FAIL` for "Delivered without known exploitable vulnerabilities". The same scan
+  now reports 152 findings. Heartbleed is still reported on 1.0.1f.
+- **Components whose own version has a letter (such as `1.0.1f`) are now checked against
+  NVD's product and version data.** Earlier versions could not parse the version and
+  reported every NVD match as confirmed, including CVEs for other products and other
+  versions. In November 2026, a keyword scan of OpenSSL 1.0.1f went from 705 to 240
+  findings.
+- A version boundary that still cannot be parsed is no longer dropped: the finding is
+  kept and marked unconfirmed instead of being reported as confirmed or not reported.
+  If such a finding is listed in the CISA KEV catalogue, the CRA report issues `REVIEW`
+  and names the CVE instead of `FAIL`. The unconfirmed label in every output format now
+  covers both reasons (NVD has not analysed the CVE, or its version range could not be
+  compared).
+
+### Known limitations
+- A letter after the last number is read as a later release, as OpenSSL uses it. For a
+  project that writes a pre-release as a bare letter (`2.0b` for a beta of 2.0), a CVE
+  fixed in 2.0 can be missed on `2.0b`.
+
 ## [0.3.2] - 2026-11-17
 
 ### Changed

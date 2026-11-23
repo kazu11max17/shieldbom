@@ -70,7 +70,7 @@ Format: SPDX 2.3 (JSON)
 Components: 9
 
   15 Critical  43 High  44 Medium  7 Low
-  21 of the 114 findings are unconfirmed (matched by name only; NVD has not analysed the CVE); check whether they apply.
+  21 of the 114 findings are unconfirmed (it could not be confirmed from NVD's data whether this version is affected); check whether they apply.
 
 Vulnerabilities
 --------------------------------------------------------------------------------
