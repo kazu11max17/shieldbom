@@ -168,7 +168,7 @@ pub(crate) fn incomplete_banner_lines(report: &AnalysisReport) -> Vec<String> {
 
 /// Shown next to a finding whose applicability could not be confirmed.
 pub(crate) const UNCONFIRMED_LABEL: &str =
-    "Unconfirmed: it could not be confirmed from NVD's data whether this version is affected (the CVE has not been analysed, or its version range could not be compared). Check whether it applies.";
+    "Unconfirmed: it could not be confirmed from NVD's data whether this version is affected (the CVE has not been analysed, its version range could not be compared, or NVD lists it only for a similarly named product). Check whether it applies.";
 
 /// One-line note under the severity counts.
 pub(crate) fn unconfirmed_summary(count: usize, total: usize) -> String {

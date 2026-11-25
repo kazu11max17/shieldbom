@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **The suggested fix version now comes from the affected range that contains the
+  component's version.** When NVD lists one range per release line, earlier versions
+  reported the fix of the first range, so OpenSSL 3.0.8 was told to "upgrade to 1.0.2zq"
+  instead of 3.0.21. When no range is known to contain the version (for example, the
+  range ends with "up to and including"), no fix version from another range is suggested.
+  Findings themselves are unchanged.
+- **A CVE that NVD lists only for a similarly named product is no longer confirmed.**
+  Without a CPE in the SBOM, the product is matched by name. A CPE for a language package
+  (`openssl.js` for node.js, `openssl_encrypt` for Python) or a name continued with `.` or
+  `-` (`openssl-feedstock`) matched a component named `openssl` and was reported as
+  confirmed. Such findings are now kept as unconfirmed. Names NVD extends with `_` (`linux`
+  and `linux_kernel`, `confluence` and `confluence_server`) are still matched as before.
+  The same applies when the component's version cannot be compared.
+- **CVE records that NVD has rejected are no longer reported.** Withdrawn or duplicate
+  records ("DO NOT USE THIS CANDIDATE NUMBER") showed up as unconfirmed findings.
+
 ## [0.3.3] - 2026-11-24
 
 If you scanned components with OpenSSL-style versions, or whose NVD data uses them (such

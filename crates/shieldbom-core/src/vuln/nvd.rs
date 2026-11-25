@@ -7,7 +7,9 @@ use serde::Deserialize;
 use crate::models::{
     AffectedVersions, Component, ScanGap, Severity, VersionRangeInfo, VulnMatch, VulnSource,
 };
-use crate::version::{fuzzy_vendor_match, parse_cpe_parts, SemVer, VersionRange};
+use crate::version::{
+    fuzzy_vendor_match, parse_cpe_parts, SemVer, VersionRange, NVD_NAME_SUFFIXES,
+};
 
 const NVD_API_URL: &str = "https://services.nvd.nist.gov/rest/json/cves/2.0";
 
@@ -43,6 +45,10 @@ struct NvdVulnWrapper {
 #[derive(Debug, Deserialize)]
 struct NvdCve {
     id: String,
+    /// "Analyzed", "Awaiting Analysis", "Rejected", ... A rejected record is
+    /// not a vulnerability (withdrawn, duplicate or "DO NOT USE").
+    #[serde(default, rename = "vulnStatus")]
+    vuln_status: Option<String>,
     #[serde(default)]
     descriptions: Vec<NvdDescription>,
     #[serde(default)]
@@ -320,18 +326,7 @@ async fn fetch_and_convert(
         pages_done += 1;
         fetched += nvd_resp.vulnerabilities.len();
 
-        for wrapper in &nvd_resp.vulnerabilities {
-            // Apply version range filtering if configuration data is available
-            match affects_component(&wrapper.cve, component) {
-                Applicability::Confirmed => {
-                    results.push(convert_nvd_cve(&wrapper.cve, component, false))
-                }
-                Applicability::Unconfirmed => {
-                    results.push(convert_nvd_cve(&wrapper.cve, component, true))
-                }
-                Applicability::NotAffected => {}
-            }
-        }
+        results.extend(convert_page(&nvd_resp, component));
 
         match next_step(
             nvd_resp.total_results as usize,
@@ -347,6 +342,28 @@ async fn fetch_and_convert(
             Err(e) => return (results, Some(e)),
         }
     }
+}
+
+/// Findings for one component from one result page. Rejected records are
+/// skipped; the rest are filtered by NVD's product and version data.
+fn convert_page(page: &NvdResponse, component: &Component) -> Vec<VulnMatch> {
+    page.vulnerabilities
+        .iter()
+        .filter(|w| !is_rejected(&w.cve))
+        .filter_map(|w| match affects_component(&w.cve, component) {
+            Applicability::Confirmed => Some(convert_nvd_cve(&w.cve, component, false)),
+            Applicability::Unconfirmed => Some(convert_nvd_cve(&w.cve, component, true)),
+            Applicability::NotAffected => None,
+        })
+        .collect()
+}
+
+/// True for records NVD has rejected. They carry no affected products and
+/// would otherwise be reported as unconfirmed findings.
+fn is_rejected(cve: &NvdCve) -> bool {
+    cve.vuln_status
+        .as_deref()
+        .is_some_and(|s| s.eq_ignore_ascii_case("rejected"))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -376,13 +393,19 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
         Some(v) => v,
         None => {
             // Cannot parse component version - fall back to accepting the match
-            // (unchanged from 0.3.1; see the v0.3.2 notes before narrowing it).
-            return Applicability::Confirmed;
+            // (unchanged from 0.3.1; see the v0.3.2 notes before narrowing it),
+            // unless the only matching CPEs are other products' (loose).
+            return if best_product_match(cve, component) == CpeMatch::Loose {
+                Applicability::Unconfirmed
+            } else {
+                Applicability::Confirmed
+            };
         }
     };
 
-    // A matching CPE entry whose version could not be compared. If nothing
-    // else confirms the match, report it as unconfirmed instead of dropping it.
+    // A matching CPE entry whose version could not be compared, or whose
+    // product only loosely matches the component name. If nothing else
+    // confirms the match, report it as unconfirmed instead of dropping it.
     let mut not_comparable = false;
 
     for config in &cve.configurations {
@@ -393,9 +416,17 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
                 }
 
                 // Check if this CPE match criterion applies to our component
-                if !cpe_matches_component(&cpe_match.criteria, component) {
+                let product = cpe_matches_component(&cpe_match.criteria, component);
+                if product == CpeMatch::None {
                     continue;
                 }
+                // A loose name match (e.g. `openssl.js` for `openssl`) may be
+                // another product: never confirm on it.
+                let confirmed = if product == CpeMatch::Exact {
+                    Applicability::Confirmed
+                } else {
+                    Applicability::Unconfirmed
+                };
 
                 // Check version range
                 let range = VersionRange::from_nvd(
@@ -417,7 +448,10 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
                             // CPE has a specific version - only match if component version matches
                             if let Some(cpe_ver) = SemVer::parse(cpe_ver_str) {
                                 if component_version == cpe_ver {
-                                    return Applicability::Confirmed;
+                                    if confirmed == Applicability::Confirmed {
+                                        return confirmed;
+                                    }
+                                    not_comparable = true;
                                 }
                             } else if cpe_ver_str != "-" {
                                 // "-" is "not applicable" in CPE, not a version.
@@ -425,11 +459,17 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
                             }
                         } else {
                             // CPE version is wildcard (*) - matches all versions
-                            return Applicability::Confirmed;
+                            if confirmed == Applicability::Confirmed {
+                                return confirmed;
+                            }
+                            not_comparable = true;
                         }
                     }
                 } else if range.contains(&component_version) {
-                    return Applicability::Confirmed;
+                    if confirmed == Applicability::Confirmed {
+                        return confirmed;
+                    }
+                    not_comparable = true;
                 }
             }
         }
@@ -442,33 +482,116 @@ fn affects_component(cve: &NvdCve, component: &Component) -> Applicability {
     }
 }
 
-/// Check if a CPE match criteria string applies to a given component,
-/// using fuzzy vendor/product matching.
-fn cpe_matches_component(cpe_criteria: &str, component: &Component) -> bool {
+/// How a CPE match criterion relates to a component.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CpeMatch {
+    None,
+    /// Same product, or a name NVD extends with `_` (`linux` and
+    /// `linux_kernel`, `confluence` and `confluence_server`), as before 0.3.4.
+    Exact,
+    /// A name match that points at another product: the CPE is for a
+    /// language package (`openssl.js` for node.js, `openssl_encrypt` for
+    /// python), or the name continues with `.` or `-` (`openssl-feedstock`).
+    /// It can only yield an unconfirmed finding.
+    Loose,
+}
+
+/// Target software values (CPE 2.3 field 10) of language package ecosystems.
+/// A CPE for such a package is a different product from a C library of the
+/// same name.
+const LANGUAGE_TARGETS: [&str; 12] = [
+    "node.js", "nodejs", "npm", "python", "pypi", "ruby", "rubygems", "php", "perl", "go", "rust",
+    "java",
+];
+
+/// Check if a CPE match criteria string applies to a given component.
+fn cpe_matches_component(cpe_criteria: &str, component: &Component) -> CpeMatch {
     let cpe_parts = match parse_cpe_parts(cpe_criteria) {
         Some(p) => p,
-        None => return false,
+        None => return CpeMatch::None,
     };
 
     // If the component has its own CPE, compare directly
     if let Some(component_cpe) = &component.cpe {
         if let Some(comp_parts) = parse_cpe_parts(component_cpe) {
-            // Compare vendor (fuzzy) and product (fuzzy)
+            // Compare vendor (fuzzy) and product (exact)
             let vendor_match = fuzzy_vendor_match(&cpe_parts.vendor, &comp_parts.vendor);
             let product_match =
                 cpe_parts.product.to_lowercase() == comp_parts.product.to_lowercase();
-            return vendor_match && product_match;
+            return if vendor_match && product_match {
+                CpeMatch::Exact
+            } else {
+                CpeMatch::None
+            };
         }
     }
 
-    // Fallback: match CPE product against component name using fuzzy matching
-    let product_match = cpe_parts.product.to_lowercase() == component.name.to_lowercase()
-        || fuzzy_vendor_match(&cpe_parts.product, &component.name);
+    // Fallback: match CPE product against component name
+    if same_product_name(&cpe_parts.product, &component.name) {
+        return CpeMatch::Exact;
+    }
+    if !(fuzzy_vendor_match(&cpe_parts.product, &component.name)
+        || fuzzy_vendor_match(&cpe_parts.vendor, &component.name))
+    {
+        return CpeMatch::None;
+    }
+    if is_language_package(cpe_criteria)
+        || extends_with_separator(&cpe_parts.product, &component.name)
+    {
+        CpeMatch::Loose
+    } else {
+        CpeMatch::Exact
+    }
+}
 
-    // Also check vendor against component name (some components match by vendor)
-    let vendor_match = fuzzy_vendor_match(&cpe_parts.vendor, &component.name);
+/// True when the CPE's target software is a language package ecosystem.
+fn is_language_package(cpe_criteria: &str) -> bool {
+    // cpe:2.3:part:vendor:product:version:update:edition:language:sw_edition:target_sw:...
+    cpe_criteria
+        .split(':')
+        .nth(10)
+        .is_some_and(|t| LANGUAGE_TARGETS.contains(&t.to_lowercase().as_str()))
+}
 
-    product_match || vendor_match
+/// True when the CPE product is the component name followed by `.` or `-`
+/// (`openssl.js`, `openssl-feedstock`). NVD joins words of one product with
+/// `_`, so those are left alone.
+fn extends_with_separator(cpe_product: &str, component_name: &str) -> bool {
+    let product = cpe_product.to_lowercase();
+    let name = component_name.to_lowercase();
+    product
+        .strip_prefix(name.as_str())
+        .is_some_and(|rest| rest.starts_with(['.', '-']))
+}
+
+/// The strongest relation between the component and any vulnerable CPE entry.
+fn best_product_match(cve: &NvdCve, component: &Component) -> CpeMatch {
+    let mut best = CpeMatch::None;
+    for m in cve
+        .configurations
+        .iter()
+        .flat_map(|c| &c.nodes)
+        .flat_map(|n| &n.cpe_match)
+        .filter(|m| m.vulnerable)
+    {
+        match cpe_matches_component(&m.criteria, component) {
+            CpeMatch::Exact => return CpeMatch::Exact,
+            CpeMatch::Loose => best = CpeMatch::Loose,
+            CpeMatch::None => {}
+        }
+    }
+    best
+}
+
+/// Product names that differ only in case, `-`/`_`/space, or a suffix NVD
+/// adds such as `_project`. Unlike `fuzzy_vendor_match`, no prefix matching.
+fn same_product_name(cpe_product: &str, component_name: &str) -> bool {
+    let norm = |s: &str| s.to_lowercase().replace(['-', ' '], "_");
+    let (a, b) = (norm(cpe_product), norm(component_name));
+    a == b
+        || NVD_NAME_SUFFIXES.iter().any(|suf| {
+            a.strip_suffix(suf) == Some(b.as_str()) || b.strip_suffix(suf) == Some(a.as_str())
+        })
 }
 
 fn convert_nvd_cve(cve: &NvdCve, component: &Component, unconfirmed: bool) -> VulnMatch {
@@ -522,7 +645,15 @@ fn extract_description(cve: &NvdCve) -> String {
 fn extract_version_info(cve: &NvdCve, component: &Component) -> (AffectedVersions, Option<String>) {
     let mut display_parts = Vec::new();
     let mut ranges = Vec::new();
+    let component_version = SemVer::parse(&component.version);
+    // Another product's fix is never named when this product is listed.
+    let exact_listed = best_product_match(cve, component) == CpeMatch::Exact;
+    // Fix of the range that contains the component's version. NVD lists one
+    // range per release line; the first one is not necessarily ours (3.0.8 was
+    // told to upgrade to 1.0.2zq).
     let mut fixed_version: Option<String> = None;
+    // Fixes of ranges that cannot be compared with the component's version.
+    let mut maybe_ours: Vec<String> = Vec::new();
 
     for config in &cve.configurations {
         for node in &config.nodes {
@@ -531,7 +662,8 @@ fn extract_version_info(cve: &NvdCve, component: &Component) -> (AffectedVersion
                     continue;
                 }
 
-                if !cpe_matches_component(&cpe_match.criteria, component) {
+                let product = cpe_matches_component(&cpe_match.criteria, component);
+                if product == CpeMatch::None {
                     continue;
                 }
 
@@ -551,13 +683,39 @@ fn extract_version_info(cve: &NvdCve, component: &Component) -> (AffectedVersion
                 });
 
                 // The versionEndExcluding is often the fix version
-                if fixed_version.is_none() {
-                    if let Some(ref end_excl) = cpe_match.version_end_excluding {
-                        fixed_version = Some(end_excl.clone());
+                let Some(ref end_excl) = cpe_match.version_end_excluding else {
+                    continue;
+                };
+                if exact_listed && product != CpeMatch::Exact {
+                    continue;
+                }
+                let range = VersionRange::from_nvd(
+                    cpe_match.version_start_including.as_deref(),
+                    cpe_match.version_start_excluding.as_deref(),
+                    cpe_match.version_end_including.as_deref(),
+                    Some(end_excl),
+                );
+                match component_version {
+                    Some(ref ver) if !range.unparsed => {
+                        if range.contains(ver) && fixed_version.is_none() {
+                            fixed_version = Some(end_excl.clone());
+                        }
+                    }
+                    _ => {
+                        if !maybe_ours.contains(end_excl) {
+                            maybe_ours.push(end_excl.clone());
+                        }
                     }
                 }
             }
         }
+    }
+
+    // No comparable range contains the version: name a fix only when a single
+    // range might be ours, never guess between release lines. A range we know
+    // the version is outside of is never a candidate.
+    if fixed_version.is_none() && maybe_ours.len() == 1 {
+        fixed_version = maybe_ours.pop();
     }
 
     let affected = AffectedVersions {
@@ -674,10 +832,13 @@ mod tests {
             "1.1.1",
             Some("cpe:2.3:a:openssl_project:openssl:1.1.1:*:*:*:*:*:*:*"),
         );
-        assert!(cpe_matches_component(
-            "cpe:2.3:a:openssl_project:openssl:1.1.1:*:*:*:*:*:*:*",
-            &comp
-        ));
+        assert_eq!(
+            cpe_matches_component(
+                "cpe:2.3:a:openssl_project:openssl:1.1.1:*:*:*:*:*:*:*",
+                &comp
+            ),
+            CpeMatch::Exact
+        );
     }
 
     #[test]
@@ -688,29 +849,29 @@ mod tests {
             "1.1.1",
             Some("cpe:2.3:a:openssl:openssl:1.1.1:*:*:*:*:*:*:*"),
         );
-        assert!(cpe_matches_component(
-            "cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*",
-            &comp
-        ));
+        assert_eq!(
+            cpe_matches_component("cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*", &comp),
+            CpeMatch::Exact
+        );
     }
 
     #[test]
     fn test_cpe_matches_component_by_name() {
         // No CPE on component, match by name
         let comp = make_component("openssl", "1.1.1", None);
-        assert!(cpe_matches_component(
-            "cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*",
-            &comp
-        ));
+        assert_eq!(
+            cpe_matches_component("cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*", &comp),
+            CpeMatch::Exact
+        );
     }
 
     #[test]
     fn test_cpe_no_match_different_product() {
         let comp = make_component("curl", "7.0.0", None);
-        assert!(!cpe_matches_component(
-            "cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*",
-            &comp
-        ));
+        assert_eq!(
+            cpe_matches_component("cpe:2.3:a:openssl_project:openssl:*:*:*:*:*:*:*:*", &comp),
+            CpeMatch::None
+        );
     }
 
     #[test]
@@ -725,6 +886,7 @@ mod tests {
         // since v0.3.3, and 1.1.1 <= 1.1.1k < 1.1.1t.
         let cve = NvdCve {
             id: "CVE-2024-TEST".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![NvdConfiguration {
@@ -747,6 +909,7 @@ mod tests {
     fn openssl_cve(cpe: &str, start_incl: Option<&str>, end_excl: Option<&str>) -> NvdCve {
         NvdCve {
             id: "CVE-2014-0160".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![NvdConfiguration {
@@ -794,6 +957,7 @@ mod tests {
     fn two_entries(first: NvdCpeMatch, second: NvdCpeMatch) -> NvdCve {
         NvdCve {
             id: "CVE-2024-TEST".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![NvdConfiguration {
@@ -849,6 +1013,7 @@ mod tests {
 
         let cve = NvdCve {
             id: "CVE-2024-TEST".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![NvdConfiguration {
@@ -874,6 +1039,7 @@ mod tests {
 
         let cve = NvdCve {
             id: "CVE-2024-TEST".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![NvdConfiguration {
@@ -899,6 +1065,7 @@ mod tests {
 
         let cve = NvdCve {
             id: "CVE-2024-TEST".to_string(),
+            vuln_status: None,
             descriptions: vec![],
             metrics: NvdMetrics::default(),
             configurations: vec![],
@@ -936,5 +1103,252 @@ mod tests {
             version_end_including: None,
         };
         assert_eq!(build_range_string(&cpe_match), "<3.0.0");
+    }
+
+    // Regression (v0.3.3): `openssl.js` (an npm package) matched `openssl` by
+    // prefix and, with a wildcard version, was reported as confirmed.
+    #[test]
+    fn test_loose_product_match_is_unconfirmed() {
+        let comp = make_component("openssl", "3.0.8", None);
+        let crit = "cpe:2.3:a:openssl.js_project:openssl.js:*:*:*:*:*:node.js:*:*";
+        assert_eq!(cpe_matches_component(crit, &comp), CpeMatch::Loose);
+        let cve = openssl_cve(crit, None, None);
+        assert_eq!(affects_component(&cve, &comp), Applicability::Unconfirmed);
+        // Also inside a version range: still only unconfirmed.
+        let ranged = openssl_cve(
+            "cpe:2.3:a:conda-forge:openssl-feedstock:*:*:*:*:*:*:*:*",
+            Some("3.0.0"),
+            Some("3.0.9"),
+        );
+        assert_eq!(
+            affects_component(&ranged, &comp),
+            Applicability::Unconfirmed
+        );
+        // Outside the range it is not reported at all.
+        let outside = openssl_cve(crit, Some("4.0.0"), Some("4.0.1"));
+        assert_eq!(
+            affects_component(&outside, &comp),
+            Applicability::NotAffected
+        );
+    }
+
+    #[test]
+    fn test_same_product_name() {
+        assert!(same_product_name("openssl", "OpenSSL"));
+        assert!(same_product_name("busybox_project", "busybox"));
+        assert!(same_product_name("libxml-2", "libxml_2"));
+        assert!(!same_product_name("openssl.js", "openssl"));
+        assert!(!same_product_name("openssl-feedstock", "openssl"));
+    }
+
+    // An exact product match next to a loose one still confirms.
+    #[test]
+    fn test_exact_match_wins_over_loose() {
+        let comp = make_component("openssl", "3.0.8", None);
+        let mut loose = entry("3.0.0", "3.0.9");
+        loose.criteria = "cpe:2.3:a:openssl.js_project:openssl.js:*:*:*:*:*:*:*:*".to_string();
+        let cve = two_entries(loose, entry("3.0.0", "3.0.9"));
+        assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
+    }
+
+    // Regression (v0.3.3): the fix of the first range was reported, so 3.0.8
+    // was told to upgrade to 1.0.2zq.
+    #[test]
+    fn test_fixed_version_is_from_the_containing_range() {
+        let comp = make_component("openssl", "3.0.8", None);
+        let cve = two_entries(entry("1.0.2", "1.0.2zq"), entry("3.0.0", "3.0.21"));
+        let (affected, fixed) = extract_version_info(&cve, &comp);
+        assert_eq!(fixed.as_deref(), Some("3.0.21"));
+        assert_eq!(affected.ranges.len(), 2, "all ranges are still listed");
+
+        let old = make_component("openssl", "1.0.2k", None);
+        assert_eq!(
+            extract_version_info(&cve, &old).1.as_deref(),
+            Some("1.0.2zq")
+        );
+    }
+
+    #[test]
+    fn test_fixed_version_not_guessed_between_release_lines() {
+        let cve = two_entries(entry("1.0.2", "1.0.2zq"), entry("3.0.0", "3.0.21"));
+        // Version that cannot be compared: two candidates, name neither.
+        let odd = make_component("openssl", "vendor-build-7", None);
+        assert_eq!(extract_version_info(&cve, &odd).1, None);
+        // A single range still names its fix.
+        let one = openssl_cve(
+            "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*",
+            Some("3.0.0"),
+            Some("3.0.21"),
+        );
+        assert_eq!(
+            extract_version_info(&one, &odd).1.as_deref(),
+            Some("3.0.21")
+        );
+    }
+
+    #[test]
+    fn test_rejected_records_are_detected() {
+        let page: NvdResponse = serde_json::from_str(
+            r#"{"totalResults":2,"vulnerabilities":[
+                {"cve":{"id":"CVE-2006-7248","vulnStatus":"Rejected"}},
+                {"cve":{"id":"CVE-2023-2650","vulnStatus":"Analyzed"}}]}"#,
+        )
+        .unwrap();
+        let rejected: Vec<bool> = page
+            .vulnerabilities
+            .iter()
+            .map(|w| is_rejected(&w.cve))
+            .collect();
+        assert_eq!(rejected, vec![true, false]);
+        // Older responses without the field are kept.
+        let none: NvdResponse = serde_json::from_str(
+            r#"{"totalResults":1,"vulnerabilities":[{"cve":{"id":"CVE-1"}}]}"#,
+        )
+        .unwrap();
+        assert!(!is_rejected(&none.vulnerabilities[0].cve));
+    }
+
+    fn cpe_entry(
+        criteria: &str,
+        start_incl: Option<&str>,
+        end_incl: Option<&str>,
+        end_excl: Option<&str>,
+    ) -> NvdCpeMatch {
+        NvdCpeMatch {
+            vulnerable: true,
+            criteria: criteria.to_string(),
+            version_start_including: start_incl.map(str::to_string),
+            version_start_excluding: None,
+            version_end_excluding: end_excl.map(str::to_string),
+            version_end_including: end_incl.map(str::to_string),
+        }
+    }
+
+    // Review of 0.3.4: names NVD extends with `_` are the same product and
+    // must stay confirmed (a KEV CVE on them makes the CRA report FAIL).
+    #[test]
+    fn test_underscore_extended_names_stay_exact() {
+        for (name, crit) in [
+            (
+                "confluence",
+                "cpe:2.3:a:atlassian:confluence_server:*:*:*:*:*:*:*:*",
+            ),
+            ("linux", "cpe:2.3:o:linux:linux_kernel:*:*:*:*:*:*:*:*"),
+            (
+                "dropbear",
+                "cpe:2.3:a:dropbear_ssh_project:dropbear_ssh:*:*:*:*:*:*:*:*",
+            ),
+            ("nginx", "cpe:2.3:a:f5:nginx_open_source:*:*:*:*:*:*:*:*"),
+        ] {
+            let comp = make_component(name, "7.13.0", None);
+            assert_eq!(
+                cpe_matches_component(crit, &comp),
+                CpeMatch::Exact,
+                "{crit}"
+            );
+            let cve = openssl_cve(crit, Some("7.0.0"), Some("7.14.0"));
+            assert_eq!(
+                affects_component(&cve, &comp),
+                Applicability::Confirmed,
+                "{crit}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_language_package_cpe_is_loose() {
+        let comp = make_component("openssl", "1.0.1f", None);
+        let crit = "cpe:2.3:a:jahlives:openssl_encrypt:*:*:*:*:*:python:*:*";
+        assert_eq!(cpe_matches_component(crit, &comp), CpeMatch::Loose);
+        let cve = openssl_cve(crit, None, Some("1.4.9"));
+        assert_eq!(affects_component(&cve, &comp), Applicability::Unconfirmed);
+        // The same name as a language package is still an exact match.
+        let js = make_component("openssl.js", "1.0.0", None);
+        assert_eq!(
+            cpe_matches_component(
+                "cpe:2.3:a:openssl.js_project:openssl.js:*:*:*:*:*:node.js:*:*",
+                &js
+            ),
+            CpeMatch::Exact
+        );
+    }
+
+    // Review of 0.3.4: a range the version is known to be outside of must not
+    // supply the fix (3.0.8 confirmed by `<=3.0.8`, other line `<1.0.2zq`).
+    #[test]
+    fn test_fixed_version_never_from_a_range_outside_the_version() {
+        let comp = make_component("openssl", "3.0.8", None);
+        let crit = "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*";
+        let cve = two_entries(
+            entry("1.0.2", "1.0.2zq"),
+            cpe_entry(crit, Some("3.0.0"), Some("3.0.8"), None),
+        );
+        assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
+        assert_eq!(extract_version_info(&cve, &comp).1, None);
+        // Confirmed by an exact CPE version, other line only.
+        let pinned = two_entries(
+            entry("1.0.2", "1.0.2zq"),
+            cpe_entry(
+                "cpe:2.3:a:openssl:openssl:3.0.8:*:*:*:*:*:*:*",
+                None,
+                None,
+                None,
+            ),
+        );
+        assert_eq!(affects_component(&pinned, &comp), Applicability::Confirmed);
+        assert_eq!(extract_version_info(&pinned, &comp).1, None);
+    }
+
+    // Review of 0.3.4: another product's fix is not named for this product.
+    #[test]
+    fn test_fixed_version_not_taken_from_a_loose_match() {
+        let comp = make_component("openssl", "3.0.8", None);
+        let cve = two_entries(
+            cpe_entry(
+                "cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*",
+                Some("3.0.0"),
+                Some("3.0.9"),
+                None,
+            ),
+            cpe_entry(
+                "cpe:2.3:a:openssl.js_project:openssl.js:*:*:*:*:*:node.js:*:*",
+                None,
+                None,
+                Some("4.0.0"),
+            ),
+        );
+        assert_eq!(affects_component(&cve, &comp), Applicability::Confirmed);
+        assert_eq!(extract_version_info(&cve, &comp).1, None);
+    }
+
+    // Review of 0.3.4: an unparseable component version no longer confirms
+    // a CVE whose only matching CPE is another product's.
+    #[test]
+    fn test_unparseable_version_with_only_loose_match_is_unconfirmed() {
+        let comp = make_component("openssl", "vendor-build-7", None);
+        let loose = openssl_cve(
+            "cpe:2.3:a:openssl.js_project:openssl.js:*:*:*:*:*:node.js:*:*",
+            None,
+            None,
+        );
+        assert_eq!(affects_component(&loose, &comp), Applicability::Unconfirmed);
+        let exact = openssl_cve("cpe:2.3:a:openssl:openssl:*:*:*:*:*:*:*:*", None, None);
+        assert_eq!(affects_component(&exact, &comp), Applicability::Confirmed);
+    }
+
+    #[test]
+    fn test_convert_page_skips_rejected_records() {
+        let page: NvdResponse = serde_json::from_str(
+            r#"{"totalResults":2,"vulnerabilities":[
+                {"cve":{"id":"CVE-2006-7248","vulnStatus":"Rejected"}},
+                {"cve":{"id":"CVE-2099-0001","vulnStatus":"Awaiting Analysis"}}]}"#,
+        )
+        .unwrap();
+        let comp = make_component("openssl", "3.0.8", None);
+        let ids: Vec<String> = convert_page(&page, &comp)
+            .into_iter()
+            .map(|v| v.cve_id)
+            .collect();
+        assert_eq!(ids, vec!["CVE-2099-0001".to_string()]);
     }
 }

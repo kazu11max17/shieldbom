@@ -280,6 +280,15 @@ impl VersionRange {
     }
 }
 
+/// Suffixes NVD adds to vendor and product names.
+pub(crate) const NVD_NAME_SUFFIXES: [&str; 5] = [
+    "_project",
+    "_software_foundation",
+    "_developers",
+    "_team",
+    "_org",
+];
+
 /// Fuzzy vendor matching for CPE strings.
 ///
 /// Handles common discrepancies between CPE vendor names and actual package names:
@@ -301,14 +310,7 @@ pub fn fuzzy_vendor_match(cpe_vendor: &str, component_name: &str) -> bool {
     }
 
     // Check common suffixes that NVD adds
-    let common_suffixes = [
-        "_project",
-        "_software_foundation",
-        "_developers",
-        "_team",
-        "_org",
-    ];
-    for suffix in common_suffixes {
+    for suffix in NVD_NAME_SUFFIXES {
         let stripped = cpe_v.trim_end_matches(suffix);
         if stripped == comp_n {
             return true;

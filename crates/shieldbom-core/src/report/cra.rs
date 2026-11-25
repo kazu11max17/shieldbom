@@ -189,7 +189,7 @@ fn unconfirmed_note(count: usize) -> String {
         return String::new();
     }
     format!(
-        " {count} finding(s) are unconfirmed: it could not be confirmed from NVD's data whether this version is affected (the CVE has not been analysed, i.e. awaiting analysis or deferred, or its version range could not be compared); each must be checked for applicability."
+        " {count} finding(s) are unconfirmed: it could not be confirmed from NVD's data whether this version is affected (the CVE has not been analysed, i.e. awaiting analysis or deferred, its version range could not be compared, or NVD lists it only for a similarly named product); each must be checked for applicability."
     )
 }
 
