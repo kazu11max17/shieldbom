@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-11-25
+
 ### Added
 - Known-answer regression tests against the live OSV.dev, NVD and CISA KEV data (ignored by default).
 
