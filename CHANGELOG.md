@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Known-answer regression tests against the live OSV.dev, NVD and CISA KEV data (ignored by default).
+
 ### Fixed
 - **The suggested fix version now comes from the affected range that contains the
   component's version.** When NVD lists one range per release line, earlier versions

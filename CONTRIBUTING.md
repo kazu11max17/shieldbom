@@ -22,6 +22,11 @@ cargo fmt --check
 
 Requires Rust 1.75+ (2021 edition).
 
+Known-answer tests scan small SBOMs against the live OSV.dev, NVD and CISA KEV APIs, so they
+need network access and are skipped by `cargo test`. They check that specific CVEs are or are
+not reported, not the total count (which changes as NVD is updated). Run them with
+`cargo test -p shieldbom --test known_answer_live -- --ignored --test-threads=1`.
+
 ## Making Changes
 
 1. **Open an issue first** if your change is non-trivial. This avoids wasted effort if the change doesn't align with the project direction.
