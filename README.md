@@ -17,9 +17,9 @@ ShieldBOM parses SBOM files (SPDX, CycloneDX), matches components against known 
 ## Features
 
 - **SBOM parsing** -- SPDX 2.3 (JSON, Tag-Value) and CycloneDX 1.4/1.5 (JSON, XML)
-- **Vulnerability matching** -- CPE-based lookup against NVD/OSV data with CVSS severity scoring
+- **Vulnerability matching** -- OSV.dev by PURL, NVD by CPE or keyword, with CVSS severity and the CISA KEV catalogue. In online scans, lookups that failed or were not possible are reported as such, never as "no vulnerabilities" (offline scans cover less; see Quick Start)
 - **License conflict detection** -- Flags known-incompatible combinations (e.g., GPL-3.0 + proprietary)
-- **Multiple output formats** -- Human-readable table, JSON, and SARIF 2.1.0
+- **Multiple output formats** -- Human-readable table, JSON, SARIF 2.1.0, HTML, and an EU CRA readiness report
 - **Offline-first** -- Download a vulnerability DB snapshot once, scan without network access (covers less than an online scan; see Quick Start)
 - **Single binary** -- No runtime dependencies; works on Linux, macOS, and Windows
 - **Non-zero exit codes** -- Fails the build when policy violations are found (severity threshold configurable)
@@ -160,6 +160,10 @@ shieldbom db info
 
 **SARIF** (`--format sarif`) -- SARIF 2.1.0 for integration with GitHub Code Scanning, VS Code, and other SARIF-compatible tools.
 
+**HTML** (`--format html`) -- A standalone report you can share.
+
+**CRA** (`--format cra`) -- An HTML report mapped to EU CRA Annex I (see below).
+
 ## Why ShieldBOM?
 
 Most SCA tools are built for web applications and container ecosystems. If you work with embedded software, you already know the gaps:
@@ -176,7 +180,7 @@ The [EU Cyber Resilience Act (Regulation 2024/2847)](https://eur-lex.europa.eu/e
 
 The regulation requires manufacturers to identify and document vulnerabilities and components of products with digital elements, including by drawing up an SBOM (Annex I, Part II). ShieldBOM assists with part of this work — specifically, the SBOM-based vulnerability identification and component documentation requirements. Full CRA compliance involves additional obligations beyond what any single tool can address.
 
-`--format cra` renders an HTML report that maps your SBOM analysis onto CRA Annex I references, including a conformity checklist with the evidence behind each Pass/Fail:
+`--format cra` renders an HTML report that maps your SBOM analysis onto CRA Annex I references, including a checklist with the evidence behind each Pass/Fail:
 
 ```bash
 shieldbom scan sbom.spdx.json --format cra \
@@ -208,21 +212,21 @@ Two consequences worth knowing:
 
 ## Roadmap
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **Phase 1** | OSS CLI: SBOM parsing, vulnerability matching, license checks, EU CRA reports | **Released** |
-| **Phase 2** | Embedded specialization: Yocto/Buildroot integration, binary matching | In progress |
-| **Phase 4** | SaaS dashboard, CI/CD integration (GitHub Actions, GitLab CI) | Planned |
-| **Phase 5** | Platform: fuzzing integration, SARIF aggregation, binary-to-SBOM generation | Planned |
+The CLI described above is what exists today. Work now goes into the accuracy of the lookups (fewer false positives and misses, and making it visible when a lookup was not possible).
 
-(Phase 3 is customer validation, which runs alongside Phase 2 and ships nothing.)
+Ideas that are **not scheduled**, and will only be picked up if users ask for them: Yocto/Buildroot integration, binary-to-SBOM generation, CI/CD integrations, a web dashboard. If one of these matters to you, please open an issue.
 
 ### Current limitations
 
-- No binary/firmware SBOM generation yet (Phase 5)
-- License conflict rules are a built-in set; custom policies are not yet supported
-- CRA report metadata is passed per invocation; there is no stored product profile yet
-- No web UI or team features (Phase 4)
+- No binary/firmware SBOM generation
+- Versions are compared as semver, with OpenSSL-style letter suffixes (`1.0.1g`) handled. Four-part (`1.2.3.4`) and date-based versions are not compared correctly
+- License conflict rules are a built-in set; custom policies are not supported
+- CRA report metadata is passed per invocation; there is no stored product profile
+- No web UI or team features
+
+## Check your own scanner
+
+A scan that says "0 vulnerabilities" may simply not have been able to look anything up. The SBOMs in [`crates/shieldbom-cli/tests/fixtures/known-answer/`](crates/shieldbom-cli/tests/fixtures/known-answer/) contain components with known vulnerabilities (for example `pkg:generic/openssl@3.0.8`, which is affected by CVE-2023-2650). Run them through any scanner you use; if a known CVE does not appear and there is no warning, the scanner cannot see that kind of component.
 
 ## Contributing
 
